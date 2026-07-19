@@ -5,17 +5,21 @@ env:
 
 on:
   push:
-    branches: [ main ]
-    tags: [ 'v*' ]
+    branches:
+      - "**"
+    tags:
+      - "v*"
   pull_request:
-    branches: [ main ]
+    branches:
+      - "**"
+  workflow_dispatch:
 
 jobs:
   Build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     
     - name: Get specific commits of git submodules
       run: sh -ex ./submod.sh
@@ -75,7 +79,7 @@ jobs:
            sha256sum ${ZIP_NAME} > ${ZIP_NAME}.sha256
            echo "artifactName=${ZIP_NAME}" >> $GITHUB_ENV
            
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
         name: ${{ env.artifactName }}
         path: |

@@ -82,14 +82,15 @@ CMiniJV880::RomInfo CMiniJV880::m_romInfos[27] = {
 
 CMiniJV880::CMiniJV880(CConfig *pConfig, CInterruptSystem *pInterrupt,
                        CGPIOManager *pGPIOManager, CI2CMaster *pI2CMaster, CSPIMaster *pSPIMaster,
-                       FATFS *pFileSystem, CScreenDevice *mScreenUnbuffered)
+                       FATFS *pFileSystem, CScreenDevice *mScreenUnbuffered,
+                       CWriteBufferDevice *pHDMIScreen)
     : CMultiCoreSupport(CMemorySystem::Get()), m_pConfig(pConfig),
       m_pFileSystem(pFileSystem), 
       m_Serial(pInterrupt, TRUE),
       m_pSoundDevice(0),
       screenUnbuffered(mScreenUnbuffered),
       m_bChannelsSwapped(pConfig->GetChannelsSwapped()),
-      m_UI(this, pGPIOManager, pI2CMaster, pSPIMaster, pConfig),
+      m_UI(this, pGPIOManager, pI2CMaster, pSPIMaster, pConfig, pHDMIScreen),
       m_pNet(nullptr),
         m_pNetDevice(nullptr),
         m_WLAN(nullptr),
@@ -711,7 +712,7 @@ bool CMiniJV880::LoadRom(uint8_t rom_index) {
     }
     m_UI.LCDMessage("Loading file\n%s", rom.filename);
     m_UI.RenderDisplay();
-    m_UI.GetLCDBuffered()->Update(256);
+    if (m_UI.GetLCDBuffered()) m_UI.GetLCDBuffered()->Update(256);
     
     
     // Check if already loaded

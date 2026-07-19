@@ -55,7 +55,8 @@ class CMiniJV880 : public CMultiCoreSupport {
 public:
   CMiniJV880(CConfig *pConfig, CInterruptSystem *pInterrupt,
              CGPIOManager *pGPIOManager, CI2CMaster *pI2CMaster, CSPIMaster *pSPIMaster,
-             FATFS *pFileSystem, CScreenDevice *mScreenUnbuffered);
+             FATFS *pFileSystem, CScreenDevice *mScreenUnbuffered,
+             CWriteBufferDevice *pHDMIScreen);
   ~CMiniJV880(void);
 
   bool Initialize(void);

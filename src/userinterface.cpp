@@ -36,7 +36,7 @@ bool CUserInterface::g_ServiceActive = false;
 unsigned long CUserInterface::g_ServiceStart = 0;
 CString CUserInterface::g_ServiceLine[2];
 
-CUserInterface::CUserInterface (CMiniJV880 *pMiniJV880, CGPIOManager *pGPIOManager, CI2CMaster *pI2CMaster, CSPIMaster *pSPIMaster, CConfig *pConfig)
+CUserInterface::CUserInterface (CMiniJV880 *pMiniJV880, CGPIOManager *pGPIOManager, CI2CMaster *pI2CMaster, CSPIMaster *pSPIMaster, CConfig *pConfig, CWriteBufferDevice *pHDMIScreen)
 :	m_pMiniJV880 (pMiniJV880),
 	m_pGPIOManager (pGPIOManager),
 	m_pI2CMaster (pI2CMaster),
@@ -44,10 +44,13 @@ CUserInterface::CUserInterface (CMiniJV880 *pMiniJV880, CGPIOManager *pGPIOManag
 	m_pConfig (pConfig),
 	m_pLCD (0),
 	m_pLCDBuffered (0),
+	m_pHDMIScreen (pHDMIScreen),
 	m_pUIButtons (0),
 	m_pRotaryEncoder (0),
 	m_bSwitchPressed (false),
-	m_lastTick (0)
+	m_lastTick (0),
+	m_lastHDMIUpdate (0),
+	m_bHDMIFirstFrame (true)
 {
 	screen_buffer = (u8 *)malloc(512);
 }
@@ -503,6 +506,135 @@ void CUserInterface::LCDMessage(const char* fmt, ...)
 
 
 
+void CUserInterface::RenderHDMIDisplay(unsigned long currentTime, bool emuActive, bool showService)
+{
+    if (!m_pHDMIScreen)
+        return;
+
+    // The main loop can run very quickly. 20 frames per second is more than
+    // enough for a character display and avoids filling the HDMI write buffer.
+    if (m_lastHDMIUpdate != 0 && currentTime - m_lastHDMIUpdate < 50000)
+        return;
+    m_lastHDMIUpdate = currentTime;
+
+    static const int HDMI_COLS = 25;
+    static const int HDMI_ROWS = 4;
+    char frame[HDMI_ROWS][HDMI_COLS + 1];
+
+    for (int row = 0; row < HDMI_ROWS; ++row)
+    {
+        memset(frame[row], ' ', HDMI_COLS);
+        frame[row][HDMI_COLS] = 0;
+    }
+
+    // Top two rows: the original JV-880 LCD contents.
+    if (emuActive)
+    {
+        int cursorRow = m_pMiniJV880->mcu.lcd.LCD_DD_RAM / 0x40;
+        int cursorCol = m_pMiniJV880->mcu.lcd.LCD_DD_RAM % 0x40;
+        bool cursorEnabled = m_pMiniJV880->mcu.lcd.LCD_C != 0;
+
+        for (int row = 0; row < 2; ++row)
+        {
+            for (int col = 0; col < HDMI_COLS; ++col)
+            {
+                uint8_t ch = (col < ACTUAL_COLS)
+                    ? m_pMiniJV880->mcu.lcd.LCD_Data[row * 40 + col]
+                    : ' ';
+
+                if (ch == 0x09) ch = '|';
+                else if (ch < 32 || ch > 126) ch = ' ';
+
+                frame[row][col] = (cursorEnabled && row == cursorRow && col == cursorCol)
+                    ? '_'
+                    : (char)ch;
+            }
+        }
+    }
+    else
+    {
+        const char *line1 = "Start Mini-JV880pi";
+        char line2[64];
+        snprintf(line2, sizeof(line2), "version %s", VERSION_SHORT);
+
+        int length1 = (int)strlen(line1);
+        int length2 = (int)strlen(line2);
+        if (length1 > HDMI_COLS) length1 = HDMI_COLS;
+        if (length2 > HDMI_COLS) length2 = HDMI_COLS;
+        memcpy(frame[0], line1, length1);
+        memcpy(frame[1], line2, length2);
+    }
+
+    // Bottom two rows: service messages or the ten front-panel LED labels.
+    if (showService)
+    {
+        for (int row = 0; row < 2; ++row)
+        {
+            int length = (int)g_ServiceLine[row].GetLength();
+            for (int col = 0; col < HDMI_COLS && col < length; ++col)
+            {
+                char ch = g_ServiceLine[row][col];
+                frame[row + 2][col] = (ch >= 32 && ch <= 126) ? ch : ' ';
+            }
+        }
+    }
+    else if (emuActive)
+    {
+        uint16_t ledState = m_pMiniJV880->mcu.jv880_led_state;
+        const char *ledNames[] = {
+            "MIDI", "Edit", "Syst", "Ryth", "Util",
+            "PPrf", "Mute", "Moni", "Info", "Entr"
+        };
+        const char *toneNames[] = { "Ton1", "Ton2", "Ton3", "Ton4" };
+        bool patchMode = (ledState & (1 << 5)) != 0;
+
+        for (int index = 0; index < 10; ++index)
+        {
+            bool isOn = (ledState & (1 << index)) != 0;
+            const char *name = nullptr;
+
+            if (index == 5)
+                name = isOn ? "Ptch" : "Perf";
+            else if (index >= 6 && index <= 9 && isOn)
+                name = patchMode ? toneNames[index - 6] : ledNames[index];
+            else if (isOn)
+                name = ledNames[index];
+
+            if (name)
+            {
+                int row = 2 + index / 5;
+                int col = (index % 5) * 5;
+                memcpy(&frame[row][col], name, 4);
+            }
+        }
+    }
+
+    CString Output;
+    if (m_bHDMIFirstFrame)
+    {
+        Output.Append("\x1B[2J"); // Clear boot messages once.
+        m_bHDMIFirstFrame = false;
+    }
+
+    Output.Append("\x1B[H\x1B[?25l");
+
+    char title[80];
+    snprintf(title, sizeof(title), "Mini-JV880pi %s - HDMI display", VERSION_SHORT);
+    Output.Append(title);
+    Output.Append("\x1B[K\r\n");
+    Output.Append("+-------------------------+\x1B[K\r\n");
+
+    for (int row = 0; row < HDMI_ROWS; ++row)
+    {
+        Output.Append("|");
+        Output.Append(frame[row]);
+        Output.Append("|\x1B[K\r\n");
+    }
+
+    Output.Append("+-------------------------+\x1B[K");
+    m_pHDMIScreen->Write(Output, strlen(Output));
+}
+
 void CUserInterface::RenderDisplay()
 {
     // Clear screen and hide cursor
@@ -534,6 +666,8 @@ void CUserInterface::RenderDisplay()
         else
             g_ServiceActive = false;
     }
+
+    RenderHDMIDisplay(currentTime, emuActive, showService);
 
     // 2-ROW MODE
     if (displayRows < 4)

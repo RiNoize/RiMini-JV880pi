@@ -1,5 +1,5 @@
 //
-// minijv880.cpp
+// minidexed.cpp
 //
 // Mini-JV880pi - Roland JV880 synthesizer for bare metal Raspberry Pi
 // Copyright (C) 2022  The MiniDexed Team
@@ -21,7 +21,6 @@
 #include "minijv880.h" 
 #include "midi.h"
 #include "userinterface.h"
-#include "version.h"
 #include <assert.h>
 #include <circle/memory.h>
 #include <circle/devicenameservice.h>
@@ -83,14 +82,15 @@ CMiniJV880::RomInfo CMiniJV880::m_romInfos[27] = {
 
 CMiniJV880::CMiniJV880(CConfig *pConfig, CInterruptSystem *pInterrupt,
                        CGPIOManager *pGPIOManager, CI2CMaster *pI2CMaster, CSPIMaster *pSPIMaster,
-                       FATFS *pFileSystem, CScreenDevice *mScreenUnbuffered)
+                       FATFS *pFileSystem, CScreenDevice *mScreenUnbuffered,
+                       CWriteBufferDevice *pHDMIScreen)
     : CMultiCoreSupport(CMemorySystem::Get()), m_pConfig(pConfig),
       m_pFileSystem(pFileSystem), 
       m_Serial(pInterrupt, TRUE),
       m_pSoundDevice(0),
       screenUnbuffered(mScreenUnbuffered),
       m_bChannelsSwapped(pConfig->GetChannelsSwapped()),
-      m_UI(this, pGPIOManager, pI2CMaster, pSPIMaster, pConfig),
+      m_UI(this, pGPIOManager, pI2CMaster, pSPIMaster, pConfig, pHDMIScreen),
       m_pNet(nullptr),
         m_pNetDevice(nullptr),
         m_WLAN(nullptr),
@@ -112,12 +112,10 @@ CMiniJV880::CMiniJV880(CConfig *pConfig, CInterruptSystem *pInterrupt,
       __atomic_store_n(&sample_write_idx, 0u, __ATOMIC_RELAXED);
       m_nPendingBankSwitch.store(0xFF, std::memory_order_release);
 
-      LOGNOTE("Mini-JV880pi version %s", VERSION_STRING);
-
   // select the sound device
   const char *pDeviceName = pConfig->GetSoundDevice();
   if (strcmp(pDeviceName, "i2s") == 0) {
-    LOGNOTE("Sound: I2S mode");
+    LOGNOTE("I2S mode");
     m_pSoundDevice = new CI2SSoundBaseDevice(
         pInterrupt, pConfig->GetSampleRate(), pConfig->GetChunkSize(), false, pI2CMaster,
         pConfig->GetDACI2CAddress(), CI2SSoundBaseDevice::DeviceModeTXOnly,
@@ -126,7 +124,7 @@ CMiniJV880::CMiniJV880(CConfig *pConfig, CInterruptSystem *pInterrupt,
 #if RASPPI == 5
     LOGNOTE("HDMI mode NOT supported on RPI 5.");
 #else
-    LOGNOTE("Sound: HDMI mode");
+    LOGNOTE("HDMI mode");
 
     m_pSoundDevice =
         new CHDMISoundBaseDevice(pInterrupt, pConfig->GetSampleRate(), pConfig->GetChunkSize());
@@ -136,7 +134,7 @@ CMiniJV880::CMiniJV880(CConfig *pConfig, CInterruptSystem *pInterrupt,
     m_bChannelsSwapped = !m_bChannelsSwapped;
 #endif
   } else {
-    LOGNOTE("Sound: PWM mode");
+    LOGNOTE("PWM mode");
 
     m_pSoundDevice =
         new CPWMSoundBaseDevice(pInterrupt, pConfig->GetSampleRate(), pConfig->GetChunkSize());
@@ -207,16 +205,13 @@ bool CMiniJV880::Initialize(void) {
    InitBankMappings();
     midiParser.Init(this);
     memset(mcu.lcd.LCD_Data, 0x20, sizeof(mcu.lcd.LCD_Data));
-    mcu.mcu.pc=0; //mcu not running  
-    //LOGNOTE("ExpROM selected from ini %d", m_pConfig->GetExpRom()); 
+    mcu.mcu.pc=0; //mcu not running   
 
     if (!LoadMainRoms(m_pConfig->GetExpRom())) {
         return false;
     }
     
     int ret = 0;
-
-    memset(mcu.cardram, 0xFF, CARDRAM_SIZE);
 
     uint8_t* nvram = (uint8_t*)m_romInfos[0].data;  // jv880_nvram.bin
     uint8_t* rom1 = (uint8_t*)m_romInfos[1].data;   // jv880_rom1.bin
@@ -542,46 +537,6 @@ void CMiniJV880::SaveNVRAMIncremental() {
         LOGERR("Failed to save NVRAM to %s, written: %d bytes, error: %d", 
                filename, bytesWritten, res);
     }
-
-    // Cardram Save 
-    
-    sprintf(filename, "nvram/jv880_crram%d.bin", m_nNVRAMSaveCounter);
-        
-    res = f_open(&file, filename, FA_READ);
-    if (res == FR_OK) {
-        LOGERR("CardRAM file exists %s, error: %d", 
-               filename, res);
-        f_close(&file);
-        return;
-    }
-    else {
-        LOGERR("OK to save CardRAM to %s, error: %d", 
-               filename, res);
-      f_close(&file);  
-    }
-    
-
-    m_UI.LCDMessage("Saving CardRAM file\njv880_crram%d.bin", m_nNVRAMSaveCounter);
-    
-    res = f_open(&file, filename, FA_WRITE | FA_CREATE_ALWAYS);
-    if (res != FR_OK) {
-        LOGERR("Cannot open file %s for writing, error: %d", filename, res);
-        return;
-    }
-    
-    res = f_write(&file, mcu.cardram, 0x8000, &bytesWritten);
-    f_close(&file);
-    
-    if (res == FR_OK && bytesWritten == 0x8000) {
-        LOGNOTE("CardRAM saved to %s", filename);
-        m_UI.LCDMessage("Saved CardRAM file\njv880_crram%d.bin", m_nNVRAMSaveCounter);
-    } else {
-        LOGERR("Failed to save CardRAM to %s, written: %d bytes, error: %d", 
-               filename, bytesWritten, res);
-    }
-
-    return;
-
 }
 
 
@@ -757,7 +712,7 @@ bool CMiniJV880::LoadRom(uint8_t rom_index) {
     }
     m_UI.LCDMessage("Loading file\n%s", rom.filename);
     m_UI.RenderDisplay();
-    m_UI.GetLCDBuffered()->Update(256);
+    if (m_UI.GetLCDBuffered()) m_UI.GetLCDBuffered()->Update(256);
     
     
     // Check if already loaded
@@ -1181,7 +1136,7 @@ bool CMiniJV880::InitNetwork()
 		}
 		else 
 		{
-			LOGERR("CMiniJV880::InitNetwork: Network type is not set, please check your minijv880.ini configuration file.");
+			LOGERR("CMiniJV880::InitNetwork: Network type is not set, please check your minidexed configuration file.");
 			NetDeviceType = NetDeviceTypeUnknown;
 		}
 		

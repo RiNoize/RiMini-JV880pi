@@ -103,7 +103,9 @@ bool CKernel::Initialize (void)
 		return FALSE;
 	}
 
-	m_pJV880 = new CMiniJV880 (&m_Config, &mInterrupt, &m_GPIOManager, &m_I2CMaster, m_pSPIMaster, &mFileSystem, &mScreenUnbuffered);
+	m_pJV880 = new CMiniJV880 (&m_Config, &mInterrupt, &m_GPIOManager, &m_I2CMaster,
+                              m_pSPIMaster, &mFileSystem, &mScreenUnbuffered,
+                              mbScreenAvailable ? &mScreen : nullptr);
 	assert (m_pJV880);
 
 	if (!m_pJV880->Initialize ())

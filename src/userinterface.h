@@ -26,7 +26,7 @@
 
 #include "config.h"
 #include "uibuttons.h"
-#include "drivers/robustky040.h"
+#include <sensor/ky040.h>
 #include <display/hd44780device.h>
 #include <display/ssd1306device.h>
 #include "drivers/ssd1306device24.h"
@@ -41,7 +41,7 @@ class CMiniJV880;
 class CUserInterface
 {
 public:
-	CUserInterface (CMiniJV880 *pMiniJV880, CGPIOManager *pGPIOManager, CI2CMaster *pI2CMaster, CSPIMaster *pSPIMaster, CConfig *pConfig);
+	CUserInterface (CMiniJV880 *pMiniJV880, CGPIOManager *pGPIOManager, CI2CMaster *pI2CMaster, CSPIMaster *pSPIMaster, CConfig *pConfig, CWriteBufferDevice *pHDMIScreen);
 	~CUserInterface (void);
 
 	bool Initialize (void);
@@ -53,6 +53,7 @@ public:
 	//void LCDMessage(const char* line1, const char* line2);
 	void LCDMessage(const char* fmt, ...);
 	void RenderDisplay(void);
+	void RenderHDMIDisplay(unsigned long currentTime, bool emuActive, bool showService);
 	CWriteBufferDevice* GetLCDBuffered() { return m_pLCDBuffered; }
 
 	static bool g_ServiceActive;
@@ -85,8 +86,8 @@ public:
 
 private:
 
-	void EncoderEventHandler (CRobustKY040::TEvent Event);
-	static void EncoderEventStub (CRobustKY040::TEvent Event, void *pParam);
+	void EncoderEventHandler (CKY040::TEvent Event);
+	static void EncoderEventStub (CKY040::TEvent Event, void *pParam);
 	void UIButtonsEventHandler (CUIButton::BtnEvent Event);
 	static void UIButtonsEventStub (CUIButton::BtnEvent Event, void *pParam);
 
@@ -102,16 +103,19 @@ private:
 	CST7789Display *m_pST7789Display;
 	CST7789Device  *m_pST7789;
 	CWriteBufferDevice *m_pLCDBuffered;
+	CWriteBufferDevice *m_pHDMIScreen; // Borrowed from the kernel; do not delete
 	
 	CUIButtons *m_pUIButtons;
 
-	CRobustKY040 *m_pRotaryEncoder;
+	CKY040 *m_pRotaryEncoder;
 	bool m_bSwitchPressed;
 	u8 *screen_buffer;
 
 	uint8_t m_lastLCDData[80] = {0}; 
 
 	unsigned m_lastTick;
+	unsigned long m_lastHDMIUpdate;
+	bool m_bHDMIFirstFrame;
 	int m_scrollPosition[2] = {0, 0};
 	int m_scrollDir[2] = {+1, +1}; 
 	unsigned long m_lastScrollTime = 0;

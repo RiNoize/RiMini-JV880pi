@@ -1,5 +1,5 @@
 //
-// minijv880.h
+// minidexed.h
 //
 // Mini-JV880pi - Roland JV880 synthesizer for bare metal Raspberry Pi
 // Copyright (C) 2022  The MiniDexed Team
@@ -55,7 +55,8 @@ class CMiniJV880 : public CMultiCoreSupport {
 public:
   CMiniJV880(CConfig *pConfig, CInterruptSystem *pInterrupt,
              CGPIOManager *pGPIOManager, CI2CMaster *pI2CMaster, CSPIMaster *pSPIMaster,
-             FATFS *pFileSystem, CScreenDevice *mScreenUnbuffered);
+             FATFS *pFileSystem, CScreenDevice *mScreenUnbuffered,
+             CWriteBufferDevice *pHDMIScreen);
   ~CMiniJV880(void);
 
   bool Initialize(void);

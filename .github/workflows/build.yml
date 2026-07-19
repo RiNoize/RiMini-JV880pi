@@ -3,6 +3,9 @@ name: Build
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+permissions:
+  contents: write
+
 on:
   push:
     branches:
@@ -86,20 +89,12 @@ jobs:
           ./MiniJV880*.zip
           ./MiniJV880*.sha256
           
-    - name: Upload to GitHub Releases
-      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    - name: Upload files to tagged release
+      if: startsWith(github.ref, 'refs/tags/')
       env:
-        UPLOADTOOL_BODY: |
-          MiniJV880 Build
-          **Build Info:**
-          - Commit: ${{ github.sha }}
-          - Build #: ${{ github.run_number }}
-          **Supported boards:**
-          - Raspberry Pi 5
-          - Raspberry Pi 4
-          - Raspberry Pi 3
-          **Installation:**
-          Extract to SD card root
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        set -ex
-        bash .github/scripts/upload.sh ./MiniJV880_*.zip ./MiniJV880_*.sha256
+        gh release upload "${GITHUB_REF_NAME}" \
+          ./MiniJV880_*.zip \
+          ./MiniJV880_*.sha256 \
+          --clobber

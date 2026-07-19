@@ -89,6 +89,11 @@ public:
 	bool     GetSSD1306LCDRotate (void) const;
 	bool     GetSSD1306LCDMirror (void) const;
 
+	// SH1106 LCD (128x64 I2C)
+	unsigned GetSH1106LCDI2CAddress (void) const;
+	bool     GetSH1106LCDRotate (void) const;
+	bool     GetSH1106LCDMirror (void) const;
+
 	// SPI support
 	unsigned GetSPIBus (void) const;
 	unsigned GetSPIMode (void) const;
@@ -229,6 +234,10 @@ private:
 	unsigned m_nSSD1306LCDHeight;
 	bool     m_bSSD1306LCDRotate;
 	bool     m_bSSD1306LCDMirror;
+
+	unsigned m_nSH1106LCDI2CAddress;
+	bool     m_bSH1106LCDRotate;
+	bool     m_bSH1106LCDMirror;
 
 	unsigned m_nSPIBus;
 	unsigned m_nSPIMode;

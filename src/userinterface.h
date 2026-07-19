@@ -30,6 +30,7 @@
 #include <display/hd44780device.h>
 #include <display/ssd1306device.h>
 #include "drivers/ssd1306device24.h"
+#include "drivers/sh1106device.h"
 #include <display/st7789device.h>
 #include <circle/gpiomanager.h>
 #include <circle/writebuffer.h>

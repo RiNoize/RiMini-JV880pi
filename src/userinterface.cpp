@@ -166,10 +166,32 @@ bool CUserInterface::LCDInit()
 	{
 		unsigned i2caddr = m_pConfig->GetLCDI2CAddress ();
 		unsigned ssd1306addr = m_pConfig->GetSSD1306LCDI2CAddress ();
+		unsigned sh1106addr = m_pConfig->GetSH1106LCDI2CAddress ();
 		bool st7789 = m_pConfig->GetST7789Enabled ();
 		unsigned lcdColumns = m_pConfig->GetLCDColumns(); // Get number of columns
 		
-		if (ssd1306addr != 0) {
+		if (sh1106addr != 0) {
+			CSH1106Device *pSH1106 = new CSH1106Device (
+				m_pConfig->GetLCDColumns (),
+				m_pConfig->GetLCDRows (),
+				m_pI2CMaster,
+				sh1106addr,
+				m_pConfig->GetSH1106LCDRotate (),
+				m_pConfig->GetSH1106LCDMirror ()
+			);
+
+			if (!pSH1106->Initialize ())
+			{
+				LOGDBG ("LCD: SH1106 initialization failed");
+				delete pSH1106;
+				return false;
+			}
+
+			LOGDBG ("LCD: SH1106 (128x64 I2C, %ux%u characters)",
+				m_pConfig->GetLCDColumns (), m_pConfig->GetLCDRows ());
+			m_pLCD = pSH1106;
+		}
+		else if (ssd1306addr != 0) {
 			if (lcdColumns >= 24) {
 				// Use 24-driver (5x8 font) for 24 columns
 				CSSD1306Device24* pSSD1306Device24 = new CSSD1306Device24 (

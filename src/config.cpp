@@ -74,6 +74,10 @@ void CConfig::Load (void)
 	m_bSSD1306LCDRotate = m_Properties.GetNumber ("SSD1306LCDRotate", 0) != 0;
 	m_bSSD1306LCDMirror = m_Properties.GetNumber ("SSD1306LCDMirror", 0) != 0;
 
+	m_nSH1106LCDI2CAddress = m_Properties.GetNumber ("SH1106LCDI2CAddress", 0);
+	m_bSH1106LCDRotate = m_Properties.GetNumber ("SH1106LCDRotate", 0) != 0;
+	m_bSH1106LCDMirror = m_Properties.GetNumber ("SH1106LCDMirror", 0) != 0;
+
 	m_nSPIBus = m_Properties.GetNumber ("SPIBus", SPI_INACTIVE);  // Disabled by default
 	m_nSPIMode = m_Properties.GetNumber ("SPIMode", SPI_DEF_MODE);
 	m_nSPIClockKHz = m_Properties.GetNumber ("SPIClockKHz", SPI_DEF_CLOCK);
@@ -287,6 +291,21 @@ bool CConfig::GetSSD1306LCDRotate (void) const
 bool CConfig::GetSSD1306LCDMirror (void) const
 {
 	return m_bSSD1306LCDMirror;
+}
+
+unsigned CConfig::GetSH1106LCDI2CAddress (void) const
+{
+	return m_nSH1106LCDI2CAddress;
+}
+
+bool CConfig::GetSH1106LCDRotate (void) const
+{
+	return m_bSH1106LCDRotate;
+}
+
+bool CConfig::GetSH1106LCDMirror (void) const
+{
+	return m_bSH1106LCDMirror;
 }
 
 unsigned CConfig::GetSPIBus (void) const

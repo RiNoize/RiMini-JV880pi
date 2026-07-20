@@ -34,6 +34,7 @@
 #include <display/st7789device.h>
 #include <circle/gpiomanager.h>
 #include <circle/writebuffer.h>
+#include <circle/screen.h>
 #include <circle/i2cmaster.h>
 #include <circle/spimaster.h>
 
@@ -42,7 +43,7 @@ class CMiniJV880;
 class CUserInterface
 {
 public:
-	CUserInterface (CMiniJV880 *pMiniJV880, CGPIOManager *pGPIOManager, CI2CMaster *pI2CMaster, CSPIMaster *pSPIMaster, CConfig *pConfig, CWriteBufferDevice *pHDMIScreen);
+	CUserInterface (CMiniJV880 *pMiniJV880, CGPIOManager *pGPIOManager, CI2CMaster *pI2CMaster, CSPIMaster *pSPIMaster, CConfig *pConfig, CScreenDevice *pHDMIDisplay, CWriteBufferDevice *pHDMIScreen);
 	~CUserInterface (void);
 
 	bool Initialize (void);
@@ -104,6 +105,7 @@ private:
 	CST7789Display *m_pST7789Display;
 	CST7789Device  *m_pST7789;
 	CWriteBufferDevice *m_pLCDBuffered;
+	CScreenDevice *m_pHDMIDisplay;     // Borrowed from the kernel; do not delete
 	CWriteBufferDevice *m_pHDMIScreen; // Borrowed from the kernel; do not delete
 	
 	CUIButtons *m_pUIButtons;
@@ -117,6 +119,10 @@ private:
 	unsigned m_lastTick;
 	unsigned long m_lastHDMIUpdate;
 	bool m_bHDMIFirstFrame;
+	char m_lastHDMIPanel[7][28];
+	unsigned m_lastHDMIScale;
+	unsigned m_lastHDMIX;
+	unsigned m_lastHDMIY;
 	int m_scrollPosition[2] = {0, 0};
 	int m_scrollDir[2] = {+1, +1}; 
 	unsigned long m_lastScrollTime = 0;

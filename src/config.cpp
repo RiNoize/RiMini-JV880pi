@@ -78,6 +78,11 @@ void CConfig::Load (void)
 	m_bSH1106LCDRotate = m_Properties.GetNumber ("SH1106LCDRotate", 0) != 0;
 	m_bSH1106LCDMirror = m_Properties.GetNumber ("SH1106LCDMirror", 0) != 0;
 
+	m_bHDMIDisplayEnabled = m_Properties.GetNumber ("HDMIDisplayEnabled", 1) != 0;
+	m_nHDMIDisplayScale = m_Properties.GetNumber ("HDMIDisplayScale", 0);
+	m_nHDMILogRows = m_Properties.GetNumber ("HDMILogRows", 6);
+	m_nHDMIDisplayMargin = m_Properties.GetNumber ("HDMIDisplayMargin", 8);
+
 	m_nSPIBus = m_Properties.GetNumber ("SPIBus", SPI_INACTIVE);  // Disabled by default
 	m_nSPIMode = m_Properties.GetNumber ("SPIMode", SPI_DEF_MODE);
 	m_nSPIClockKHz = m_Properties.GetNumber ("SPIClockKHz", SPI_DEF_CLOCK);
@@ -306,6 +311,26 @@ bool CConfig::GetSH1106LCDRotate (void) const
 bool CConfig::GetSH1106LCDMirror (void) const
 {
 	return m_bSH1106LCDMirror;
+}
+
+bool CConfig::GetHDMIDisplayEnabled (void) const
+{
+	return m_bHDMIDisplayEnabled;
+}
+
+unsigned CConfig::GetHDMIDisplayScale (void) const
+{
+	return m_nHDMIDisplayScale;
+}
+
+unsigned CConfig::GetHDMILogRows (void) const
+{
+	return m_nHDMILogRows;
+}
+
+unsigned CConfig::GetHDMIDisplayMargin (void) const
+{
+	return m_nHDMIDisplayMargin;
 }
 
 unsigned CConfig::GetSPIBus (void) const

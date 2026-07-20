@@ -94,6 +94,12 @@ public:
 	bool     GetSH1106LCDRotate (void) const;
 	bool     GetSH1106LCDMirror (void) const;
 
+	// HDMI virtual front-panel display
+	bool     GetHDMIDisplayEnabled (void) const;
+	unsigned GetHDMIDisplayScale (void) const;       // 0 = automatic
+	unsigned GetHDMILogRows (void) const;
+	unsigned GetHDMIDisplayMargin (void) const;
+
 	// SPI support
 	unsigned GetSPIBus (void) const;
 	unsigned GetSPIMode (void) const;
@@ -238,6 +244,11 @@ private:
 	unsigned m_nSH1106LCDI2CAddress;
 	bool     m_bSH1106LCDRotate;
 	bool     m_bSH1106LCDMirror;
+
+	bool     m_bHDMIDisplayEnabled;
+	unsigned m_nHDMIDisplayScale;
+	unsigned m_nHDMILogRows;
+	unsigned m_nHDMIDisplayMargin;
 
 	unsigned m_nSPIBus;
 	unsigned m_nSPIMode;

@@ -83,6 +83,11 @@ void CConfig::Load (void)
 	m_nHDMILogRows = m_Properties.GetNumber ("HDMILogRows", 6);
 	m_nHDMIDisplayMargin = m_Properties.GetNumber ("HDMIDisplayMargin", 8);
 
+	// IO = original display layout, IE = extended 25-column x 8-row layout.
+	// Keep IO as the fallback so existing 1602/2004 configurations remain unchanged.
+	std::string displayInterface = m_Properties.GetString ("DisplayInterface", "IO");
+	m_bDisplayInterfaceExtended = displayInterface == "IE" || displayInterface == "ie";
+
 	m_nSPIBus = m_Properties.GetNumber ("SPIBus", SPI_INACTIVE);  // Disabled by default
 	m_nSPIMode = m_Properties.GetNumber ("SPIMode", SPI_DEF_MODE);
 	m_nSPIClockKHz = m_Properties.GetNumber ("SPIClockKHz", SPI_DEF_CLOCK);
@@ -331,6 +336,11 @@ unsigned CConfig::GetHDMILogRows (void) const
 unsigned CConfig::GetHDMIDisplayMargin (void) const
 {
 	return m_nHDMIDisplayMargin;
+}
+
+bool CConfig::GetDisplayInterfaceExtended (void) const
+{
+	return m_bDisplayInterfaceExtended;
 }
 
 unsigned CConfig::GetSPIBus (void) const

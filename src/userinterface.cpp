@@ -534,92 +534,99 @@ void CUserInterface::LCDMessage(const char* fmt, ...)
 
 
 
+
 namespace
 {
-	static const unsigned HDMI_CONTENT_COLS = 25;
-	static const unsigned HDMI_CONTENT_ROWS = 4;
-	static const unsigned HDMI_PANEL_COLS = 27;
-	static const unsigned HDMI_PANEL_ROWS = 7;
-	static const unsigned HDMI_CELL_WIDTH = FONT5X8_WIDTH + 1;
-	static const unsigned HDMI_CELL_HEIGHT = FONT5X8_HEIGHT + 1;
+	// Common virtual display geometry. The physical SH1106/SSD1306/ST7920
+	// and the HDMI mirror all use the same 25x8 character image.
+	static const unsigned VIRTUAL_DISPLAY_COLS = 25;
+	static const unsigned VIRTUAL_DISPLAY_ROWS = 8;
+	static const unsigned HDMI_LCD_WIDTH = 128;
+	static const unsigned HDMI_LCD_HEIGHT = 64;
+	static const unsigned HDMI_FONT_WIDTH = FONT5X8_WIDTH;   // 5 pixels
+	static const unsigned HDMI_FONT_HEIGHT = FONT5X8_HEIGHT; // 8 pixels
+	static const unsigned HDMI_ROW_HEIGHT = 8;
 
-	static void DrawHDMICell (CScreenDevice *pScreen, unsigned x, unsigned y,
-							 char ch, unsigned scale)
+	static void ClearVirtualFrame (char frame[VIRTUAL_DISPLAY_ROWS][VIRTUAL_DISPLAY_COLS + 1])
 	{
-		if (!pScreen || scale == 0)
+		for (unsigned row = 0; row < VIRTUAL_DISPLAY_ROWS; ++row)
+		{
+			memset (frame[row], ' ', VIRTUAL_DISPLAY_COLS);
+			frame[row][VIRTUAL_DISPLAY_COLS] = 0;
+		}
+	}
+
+	static void PutVirtualText (char row[VIRTUAL_DISPLAY_COLS + 1],
+					 unsigned column, const char *text)
+	{
+		if (!text || column >= VIRTUAL_DISPLAY_COLS)
+			return;
+
+		for (unsigned index = 0;
+			text[index] != 0 && column + index < VIRTUAL_DISPLAY_COLS;
+			++index)
+		{
+			const char ch = text[index];
+			row[column + index] = ch >= 32 && ch <= 126 ? ch : ' ';
+		}
+	}
+
+	static void FillHDMIRect (CScreenDevice *pScreen, unsigned x, unsigned y,
+							 unsigned width, unsigned height, TScreenColor color)
+	{
+		if (!pScreen || width == 0 || height == 0)
 			return;
 
 		const unsigned screenWidth = pScreen->GetWidth ();
 		const unsigned screenHeight = pScreen->GetHeight ();
-		const unsigned cellWidth = HDMI_CELL_WIDTH * scale;
-		const unsigned cellHeight = HDMI_CELL_HEIGHT * scale;
 
-		// Paint the complete cell black first. This removes the previous glyph.
-		for (unsigned py = 0; py < cellHeight; ++py)
+		for (unsigned py = 0; py < height && y + py < screenHeight; ++py)
 		{
-			const unsigned sy = y + py;
-			if (sy >= screenHeight)
-				break;
-
-			for (unsigned px = 0; px < cellWidth; ++px)
-			{
-				const unsigned sx = x + px;
-				if (sx >= screenWidth)
-					break;
-				pScreen->SetPixel (sx, sy, BLACK_COLOR);
-			}
+			for (unsigned px = 0; px < width && x + px < screenWidth; ++px)
+				pScreen->SetPixel (x + px, y + py, color);
 		}
+	}
+
+	static void DrawHDMILCDChar (CScreenDevice *pScreen, unsigned x, unsigned y,
+							  char ch, unsigned scale)
+	{
+		if (!pScreen || scale == 0)
+			return;
 
 		unsigned glyphIndex = 0;
 		const unsigned uch = (unsigned char) ch;
 		if (uch >= 32 && uch < 32 + FONT5X8_SIZE)
 			glyphIndex = uch - 32;
 
-		for (unsigned gy = 0; gy < FONT5X8_HEIGHT; ++gy)
+		const unsigned screenWidth = pScreen->GetWidth ();
+		const unsigned screenHeight = pScreen->GetHeight ();
+
+		for (unsigned gy = 0; gy < HDMI_FONT_HEIGHT; ++gy)
 		{
 			const u8 rowBits = Font5x8[glyphIndex][gy];
-			for (unsigned gx = 0; gx < FONT5X8_WIDTH; ++gx)
+			for (unsigned gx = 0; gx < HDMI_FONT_WIDTH; ++gx)
 			{
-				if ((rowBits & (1u << (FONT5X8_WIDTH - 1 - gx))) == 0)
+				if ((rowBits & (1u << (HDMI_FONT_WIDTH - 1 - gx))) == 0)
 					continue;
 
 				const unsigned pixelX = x + gx * scale;
 				const unsigned pixelY = y + gy * scale;
-				for (unsigned sy = 0; sy < scale; ++sy)
+				for (unsigned sy = 0; sy < scale && pixelY + sy < screenHeight; ++sy)
 				{
-					if (pixelY + sy >= screenHeight)
-						break;
-					for (unsigned sx = 0; sx < scale; ++sx)
-					{
-						if (pixelX + sx >= screenWidth)
-							break;
-						pScreen->SetPixel (pixelX + sx, pixelY + sy, WHITE_COLOR);
-					}
+					for (unsigned sx = 0; sx < scale && pixelX + sx < screenWidth; ++sx)
+						pScreen->SetPixel (pixelX + sx, pixelY + sy, BRIGHT_WHITE_COLOR);
 				}
 			}
 		}
 	}
 }
 
-void CUserInterface::RenderHDMIDisplay(unsigned long currentTime, bool emuActive, bool showService)
+void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
+						 bool emuActive, bool showService)
 {
-	if (!m_pConfig->GetHDMIDisplayEnabled () || !m_pHDMIDisplay || !m_pHDMIScreen)
-		return;
+	ClearVirtualFrame (frame);
 
-	// The main loop can run very quickly. 20 checks per second is enough for
-	// the front panel. Pixels are redrawn only when the contents actually change.
-	if (m_lastHDMIUpdate != 0 && currentTime - m_lastHDMIUpdate < 50000)
-		return;
-	m_lastHDMIUpdate = currentTime;
-
-	char content[HDMI_CONTENT_ROWS][HDMI_CONTENT_COLS + 1];
-	for (unsigned row = 0; row < HDMI_CONTENT_ROWS; ++row)
-	{
-		memset (content[row], ' ', HDMI_CONTENT_COLS);
-		content[row][HDMI_CONTENT_COLS] = 0;
-	}
-
-	// Top two rows: original JV-880 LCD data.
+	// Rows 0 and 1 always reproduce the two original JV-880 LCD lines.
 	if (emuActive)
 	{
 		const int cursorRow = m_pMiniJV880->mcu.lcd.LCD_DD_RAM / 0x40;
@@ -628,17 +635,17 @@ void CUserInterface::RenderHDMIDisplay(unsigned long currentTime, bool emuActive
 
 		for (unsigned row = 0; row < 2; ++row)
 		{
-			for (unsigned col = 0; col < HDMI_CONTENT_COLS; ++col)
+			for (unsigned col = 0; col < VIRTUAL_DISPLAY_COLS; ++col)
 			{
-				u8 ch = (col < ACTUAL_COLS)
+				u8 ch = col < ACTUAL_COLS
 					? m_pMiniJV880->mcu.lcd.LCD_Data[row * 40 + col]
 					: ' ';
 
 				if (ch == 0x09) ch = '|';
 				else if (ch < 32 || ch > 126) ch = ' ';
 
-				content[row][col] = (cursorEnabled
-					&& (int) row == cursorRow && (int) col == cursorCol)
+				frame[row][col] = cursorEnabled
+					&& (int) row == cursorRow && (int) col == cursorCol
 					? '_'
 					: (char) ch;
 			}
@@ -646,31 +653,73 @@ void CUserInterface::RenderHDMIDisplay(unsigned long currentTime, bool emuActive
 	}
 	else
 	{
-		const char *line1 = "Start Mini-JV880pi";
-		char line2[64];
-		snprintf (line2, sizeof line2, "version %s", VERSION_SHORT);
-		memcpy (content[0], line1,
-			strlen (line1) < HDMI_CONTENT_COLS ? strlen (line1) : HDMI_CONTENT_COLS);
-		memcpy (content[1], line2,
-			strlen (line2) < HDMI_CONTENT_COLS ? strlen (line2) : HDMI_CONTENT_COLS);
+		PutVirtualText (frame[0], 0, "Start Mini-JV880pi");
+		char versionLine[64];
+		snprintf (versionLine, sizeof versionLine, "version %s", VERSION_SHORT);
+		PutVirtualText (frame[1], 0, versionLine);
 	}
 
-	// Bottom two rows: service messages or front-panel LED labels.
+	const u16 ledState = emuActive ? m_pMiniJV880->mcu.jv880_led_state : 0;
+
+	if (m_pConfig->GetDisplayInterfaceExtended ())
+	{
+		// IE: row 2 is intentionally blank. Row 3 is the section header.
+		// The Vol/Pan value slots are placeholders in this first IE stage;
+		// the MIDI bank/pickup implementation will replace them with live values.
+		PutVirtualText (frame[3], 0,
+			(ledState & (1 << 5)) != 0 ? "Ptch" : "Perf");
+		PutVirtualText (frame[3], 5,  "Ton1");
+		PutVirtualText (frame[3], 10, "Ton2");
+		PutVirtualText (frame[3], 15, "Ton3");
+		PutVirtualText (frame[3], 20, "Ton4");
+
+		for (unsigned column = 5; column <= 20; column += 5)
+		{
+			PutVirtualText (frame[4], column, "Vol");
+			PutVirtualText (frame[5], column, "---");
+			PutVirtualText (frame[6], column, "Pan");
+			PutVirtualText (frame[7], column, "---");
+		}
+
+		// Temporary service messages use the last two IE rows and disappear
+		// automatically after the existing three-second timeout.
+		if (showService)
+		{
+			memset (frame[6], ' ', VIRTUAL_DISPLAY_COLS);
+			memset (frame[7], ' ', VIRTUAL_DISPLAY_COLS);
+			for (unsigned row = 0; row < 2; ++row)
+			{
+				const unsigned length = g_ServiceLine[row].GetLength ();
+				for (unsigned col = 0;
+					col < VIRTUAL_DISPLAY_COLS && col < length;
+					++col)
+				{
+					const char ch = g_ServiceLine[row][col];
+					frame[row + 6][col] = ch >= 32 && ch <= 126 ? ch : ' ';
+				}
+			}
+		}
+
+		return;
+	}
+
+	// IO: preserve the original four-row information in rows 0..3.
 	if (showService)
 	{
 		for (unsigned row = 0; row < 2; ++row)
 		{
 			const unsigned length = g_ServiceLine[row].GetLength ();
-			for (unsigned col = 0; col < HDMI_CONTENT_COLS && col < length; ++col)
+			for (unsigned col = 0;
+				col < VIRTUAL_DISPLAY_COLS && col < length;
+				++col)
 			{
 				const char ch = g_ServiceLine[row][col];
-				content[row + 2][col] = (ch >= 32 && ch <= 126) ? ch : ' ';
+				frame[row + 2][col] = ch >= 32 && ch <= 126 ? ch : ' ';
 			}
 		}
 	}
 	else if (emuActive)
 	{
-		const u16 ledState = m_pMiniJV880->mcu.jv880_led_state;
 		const char *ledNames[] = {
 			"MIDI", "Edit", "Syst", "Ryth", "Util",
 			"PPrf", "Mute", "Moni", "Info", "Entr"
@@ -691,44 +740,25 @@ void CUserInterface::RenderHDMIDisplay(unsigned long currentTime, bool emuActive
 				name = ledNames[index];
 
 			if (name)
-			{
-				const unsigned row = 2 + index / 5;
-				const unsigned col = (index % 5) * 5;
-				memcpy (&content[row][col], name, 4);
-			}
+				PutVirtualText (frame[2 + index / 5], (index % 5) * 5, name);
 		}
 	}
+}
 
-	char panel[HDMI_PANEL_ROWS][HDMI_PANEL_COLS + 1];
-	for (unsigned row = 0; row < HDMI_PANEL_ROWS; ++row)
-	{
-		memset (panel[row], ' ', HDMI_PANEL_COLS);
-		panel[row][HDMI_PANEL_COLS] = 0;
-	}
+void CUserInterface::RenderHDMIDisplay(unsigned long currentTime,
+					 const char frame[8][26])
+{
+	if (!m_pConfig->GetHDMIDisplayEnabled () || !m_pHDMIDisplay || !m_pHDMIScreen)
+		return;
 
-	char title[64];
-	snprintf (title, sizeof title, "Mini-JV880pi %s", VERSION_SHORT);
-	unsigned titleLength = strlen (title);
-	if (titleLength > HDMI_PANEL_COLS)
-		titleLength = HDMI_PANEL_COLS;
-	const unsigned titleStart = (HDMI_PANEL_COLS - titleLength) / 2;
-	memcpy (&panel[0][titleStart], title, titleLength);
+	// Check at 20 Hz. Pixels are only redrawn when the virtual LCD changes.
+	if (m_lastHDMIUpdate != 0 && currentTime - m_lastHDMIUpdate < 50000)
+		return;
+	m_lastHDMIUpdate = currentTime;
 
-	panel[1][0] = '+';
-	panel[1][HDMI_PANEL_COLS - 1] = '+';
-	panel[HDMI_PANEL_ROWS - 1][0] = '+';
-	panel[HDMI_PANEL_ROWS - 1][HDMI_PANEL_COLS - 1] = '+';
-	for (unsigned col = 1; col < HDMI_PANEL_COLS - 1; ++col)
-	{
-		panel[1][col] = '-';
-		panel[HDMI_PANEL_ROWS - 1][col] = '-';
-	}
-	for (unsigned row = 0; row < HDMI_CONTENT_ROWS; ++row)
-	{
-		panel[row + 2][0] = '|';
-		panel[row + 2][HDMI_PANEL_COLS - 1] = '|';
-		memcpy (&panel[row + 2][1], content[row], HDMI_CONTENT_COLS);
-	}
+	char panel[VIRTUAL_DISPLAY_ROWS][VIRTUAL_DISPLAY_COLS];
+	for (unsigned row = 0; row < VIRTUAL_DISPLAY_ROWS; ++row)
+		memcpy (panel[row], frame[row], VIRTUAL_DISPLAY_COLS);
 
 	const unsigned screenWidth = m_pHDMIDisplay->GetWidth ();
 	const unsigned screenHeight = m_pHDMIDisplay->GetHeight ();
@@ -736,6 +766,7 @@ void CUserInterface::RenderHDMIDisplay(unsigned long currentTime, bool emuActive
 	const unsigned terminalCharHeight = terminalRows != 0
 		? screenHeight / terminalRows
 		: 16;
+
 	unsigned margin = m_pConfig->GetHDMIDisplayMargin ();
 	if (margin > 64) margin = 64;
 
@@ -746,12 +777,8 @@ void CUserInterface::RenderHDMIDisplay(unsigned long currentTime, bool emuActive
 	else if (terminalRows == 1)
 		logRows = 1;
 
-	const unsigned basePanelWidth = HDMI_PANEL_COLS * HDMI_CELL_WIDTH;
-	const unsigned basePanelHeight = HDMI_PANEL_ROWS * HDMI_CELL_HEIGHT;
-
-	// If the requested log area leaves no room, shrink the log area first.
 	while (logRows > 1
-		&& logRows * terminalCharHeight + basePanelHeight + 2 * margin > screenHeight)
+		&& logRows * terminalCharHeight + HDMI_LCD_HEIGHT + 2 * margin > screenHeight)
 	{
 		--logRows;
 	}
@@ -762,20 +789,20 @@ void CUserInterface::RenderHDMIDisplay(unsigned long currentTime, bool emuActive
 		: screenWidth;
 	const unsigned availableHeight = screenHeight > logPixelHeight + 2 * margin
 		? screenHeight - logPixelHeight - 2 * margin
-		: basePanelHeight;
+		: HDMI_LCD_HEIGHT;
 
-	unsigned fitScaleX = availableWidth / basePanelWidth;
-	unsigned fitScaleY = availableHeight / basePanelHeight;
+	unsigned fitScaleX = availableWidth / HDMI_LCD_WIDTH;
+	unsigned fitScaleY = availableHeight / HDMI_LCD_HEIGHT;
 	unsigned fitScale = fitScaleX < fitScaleY ? fitScaleX : fitScaleY;
 	if (fitScale < 1) fitScale = 1;
-	if (fitScale > 8) fitScale = 8;
+	if (fitScale > 12) fitScale = 12;
 
 	unsigned scale = m_pConfig->GetHDMIDisplayScale ();
 	if (scale == 0 || scale > fitScale)
 		scale = fitScale;
 
-	const unsigned panelWidth = basePanelWidth * scale;
-	const unsigned panelHeight = basePanelHeight * scale;
+	const unsigned panelWidth = HDMI_LCD_WIDTH * scale;
+	const unsigned panelHeight = HDMI_LCD_HEIGHT * scale;
 	const unsigned panelX = screenWidth > panelWidth
 		? (screenWidth - panelWidth) / 2
 		: 0;
@@ -786,9 +813,8 @@ void CUserInterface::RenderHDMIDisplay(unsigned long currentTime, bool emuActive
 
 	if (m_bHDMIFirstFrame)
 	{
-		// Clear the old boot output, reserve only the upper rows for logs, and
-		// return the terminal cursor to the log area. The panel is pixel-drawn
-		// below this region, so later log lines cannot scroll through it.
+		// Logs remain in the upper terminal region. The blue LCD is drawn in
+		// pixels below it, so later log output cannot scroll through the LCD.
 		char terminalSetup[96];
 		snprintf (terminalSetup, sizeof terminalSetup,
 			"\x1B[2J\x1B[?25l\x1B[1;%ur\x1B[%u;1H", logRows, logRows);
@@ -806,14 +832,35 @@ void CUserInterface::RenderHDMIDisplay(unsigned long currentTime, bool emuActive
 	if (!geometryChanged && !contentsChanged)
 		return;
 
-	for (unsigned row = 0; row < HDMI_PANEL_ROWS; ++row)
+	if (geometryChanged)
 	{
-		for (unsigned col = 0; col < HDMI_PANEL_COLS; ++col)
+		if (m_lastHDMIScale != 0)
 		{
-			DrawHDMICell (m_pHDMIDisplay,
-				panelX + col * HDMI_CELL_WIDTH * scale,
-				panelY + row * HDMI_CELL_HEIGHT * scale,
-				panel[row][col], scale);
+			FillHDMIRect (m_pHDMIDisplay, m_lastHDMIX, m_lastHDMIY,
+				HDMI_LCD_WIDTH * m_lastHDMIScale,
+				HDMI_LCD_HEIGHT * m_lastHDMIScale,
+				BLACK_COLOR);
+		}
+
+		// Exact 128x64 blue LCD surface, enlarged only by an integer factor.
+		FillHDMIRect (m_pHDMIDisplay, panelX, panelY,
+			panelWidth, panelHeight, BLUE_COLOR);
+	}
+
+	for (unsigned row = 0; row < VIRTUAL_DISPLAY_ROWS; ++row)
+	{
+		for (unsigned col = 0; col < VIRTUAL_DISPLAY_COLS; ++col)
+		{
+			const char ch = panel[row][col];
+			if (!geometryChanged && ch == m_lastHDMIPanel[row][col])
+				continue;
+
+			const unsigned cellX = panelX + col * HDMI_FONT_WIDTH * scale;
+			const unsigned cellY = panelY + row * HDMI_ROW_HEIGHT * scale;
+
+			FillHDMIRect (m_pHDMIDisplay, cellX, cellY,
+				HDMI_FONT_WIDTH * scale, HDMI_ROW_HEIGHT * scale, BLUE_COLOR);
+			DrawHDMILCDChar (m_pHDMIDisplay, cellX, cellY, ch, scale);
 		}
 	}
 
@@ -855,7 +902,28 @@ void CUserInterface::RenderDisplay()
             g_ServiceActive = false;
     }
 
-    RenderHDMIDisplay(currentTime, emuActive, showService);
+    char virtualFrame[8][26];
+    BuildVirtualDisplayFrame(virtualFrame, emuActive, showService);
+    RenderHDMIDisplay(currentTime, virtualFrame);
+
+    // IE on a 128x64 graphic display: write the exact same 25x8 frame
+    // that is mirrored on HDMI. Wider displays are padded; narrower ones
+    // are clipped without changing the virtual 128x64 geometry.
+    if (m_pConfig->GetDisplayInterfaceExtended() && displayRows >= 8)
+    {
+        for (int row = 0; row < displayRows; ++row)
+        {
+            for (int col = 0; col < displayCols; ++col)
+            {
+                char ch = (row < 8 && col < 25) ? virtualFrame[row][col] : ' ';
+                char buf[2] = { ch, 0 };
+                Msg.Append(buf);
+            }
+        }
+
+        LCDWrite(Msg);
+        return;
+    }
 
     // 2-ROW MODE
     if (displayRows < 4)

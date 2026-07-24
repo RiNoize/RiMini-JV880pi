@@ -100,6 +100,9 @@ public:
 	unsigned GetHDMILogRows (void) const;
 	unsigned GetHDMIDisplayMargin (void) const;
 
+	// Display layout: IO = original interface, IE = extended 25x8 interface
+	bool     GetDisplayInterfaceExtended (void) const;
+
 	// SPI support
 	unsigned GetSPIBus (void) const;
 	unsigned GetSPIMode (void) const;
@@ -249,6 +252,7 @@ private:
 	unsigned m_nHDMIDisplayScale;
 	unsigned m_nHDMILogRows;
 	unsigned m_nHDMIDisplayMargin;
+	bool     m_bDisplayInterfaceExtended;
 
 	unsigned m_nSPIBus;
 	unsigned m_nSPIMode;

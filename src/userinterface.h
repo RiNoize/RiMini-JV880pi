@@ -55,7 +55,8 @@ public:
 	//void LCDMessage(const char* line1, const char* line2);
 	void LCDMessage(const char* fmt, ...);
 	void RenderDisplay(void);
-	void RenderHDMIDisplay(unsigned long currentTime, bool emuActive, bool showService);
+	void BuildVirtualDisplayFrame(char frame[8][26], bool emuActive, bool showService);
+	void RenderHDMIDisplay(unsigned long currentTime, const char frame[8][26]);
 	CWriteBufferDevice* GetLCDBuffered() { return m_pLCDBuffered; }
 
 	static bool g_ServiceActive;
@@ -119,7 +120,7 @@ private:
 	unsigned m_lastTick;
 	unsigned long m_lastHDMIUpdate;
 	bool m_bHDMIFirstFrame;
-	char m_lastHDMIPanel[7][28];
+	char m_lastHDMIPanel[8][25];
 	unsigned m_lastHDMIScale;
 	unsigned m_lastHDMIX;
 	unsigned m_lastHDMIY;

@@ -64,6 +64,7 @@ public:
     static CString g_ServiceLine[2];
 	
 	// MIDI button mappings - cached from config
+	bool m_bMIDIButtonsUseNotes;
     unsigned m_nMIDIButtonChannel;
     unsigned m_nMIDIPreview;
     unsigned m_nMIDILeft;

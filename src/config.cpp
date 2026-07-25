@@ -142,6 +142,14 @@ void CConfig::Load (void)
 	m_ButtonActionSaveNVRAM = m_Properties.GetString("ButtonActionSaveNVRAM", "longpress");
 
 	// MIDI buttons
+	// CC keeps compatibility with older configurations. Notes uses MIDI
+	// Note On/Off messages so Control Change numbers remain free for parameters.
+	std::string midiButtonsMode = m_Properties.GetString ("MIDIButtonsMode", "CC");
+	m_bMIDIButtonsUseNotes =
+		midiButtonsMode == "Notes" || midiButtonsMode == "NOTES"
+		|| midiButtonsMode == "notes" || midiButtonsMode == "Note"
+		|| midiButtonsMode == "NOTE" || midiButtonsMode == "note";
+
 	m_nMIDIButtonCh = m_Properties.GetNumber ("MIDIButtonCh", 0);
 	m_nMIDIButtonPreview = m_Properties.GetNumber("MIDIButtonPreview", 0);
 	m_nMIDIButtonLeft = m_Properties.GetNumber("MIDIButtonLeft", 0);
@@ -580,6 +588,11 @@ const char *CConfig::GetButtonActionDown (void) const
 const char *CConfig::GetButtonActionSaveNVRAM (void) const
 {
 	return m_ButtonActionSaveNVRAM.c_str();
+}
+
+bool CConfig::GetMIDIButtonsUseNotes (void) const
+{
+	return m_bMIDIButtonsUseNotes;
 }
 
 unsigned CConfig::GetMIDIButtonCh (void) const

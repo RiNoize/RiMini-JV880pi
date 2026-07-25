@@ -332,7 +332,64 @@ void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
 
     uint8_t status = pData[0];
 
-    // ===== Priority 1: Note On/Off =====
+    auto MIDIButtonChannelMatches = [this](uint8_t channel) {
+        if (m_UI.m_nMIDIButtonChannel == 0) return false;
+        if (m_UI.m_nMIDIButtonChannel == 17) return true;
+        return (m_UI.m_nMIDIButtonChannel - 1) == channel;
+    };
+
+    // ===== Priority 1: UI buttons by MIDI Note On/Off =====
+    // Note On with velocity > 0 presses the virtual button.
+    // Note Off, or Note On with velocity 0, releases it.
+    if (m_UI.m_bMIDIButtonsUseNotes
+        && ((status & 0xF0) == 0x80 || (status & 0xF0) == 0x90)
+        && nLength == 3
+        && MIDIButtonChannelMatches(status & 0x0F))
+    {
+        const uint8_t note = pData[1] & 0x7F;
+        const bool pressed = (status & 0xF0) == 0x90 && pData[2] != 0;
+
+        auto handleButton = [this, note, pressed](uint8_t configuredNote,
+                                                  CUIButton::BtnEvent event) {
+            if (configuredNote != 0 && note == configuredNote) {
+                m_UI.TriggerUIButtonEvent(pressed
+                    ? event
+                    : CUIButton::BtnEventRelease);
+                return true;
+            }
+            return false;
+        };
+
+        if (handleButton(m_UI.m_nMIDIPreview,      CUIButton::BtnEventPreview)) return;
+        if (handleButton(m_UI.m_nMIDILeft,         CUIButton::BtnEventLeft)) return;
+        if (handleButton(m_UI.m_nMIDIRight,        CUIButton::BtnEventRight)) return;
+        if (handleButton(m_UI.m_nMIDIData,         CUIButton::BtnEventData)) return;
+        if (handleButton(m_UI.m_nMIDIToneSelect,   CUIButton::BtnEventToneSelect)) return;
+        if (handleButton(m_UI.m_nMIDIPatchPerform, CUIButton::BtnEventPatchPerform)) return;
+        if (handleButton(m_UI.m_nMIDIEdit,         CUIButton::BtnEventEdit)) return;
+        if (handleButton(m_UI.m_nMIDISystem,       CUIButton::BtnEventSystem)) return;
+        if (handleButton(m_UI.m_nMIDIRhythm,       CUIButton::BtnEventRhythm)) return;
+        if (handleButton(m_UI.m_nMIDIUtility,      CUIButton::BtnEventUtility)) return;
+        if (handleButton(m_UI.m_nMIDIMute,         CUIButton::BtnEventMute)) return;
+        if (handleButton(m_UI.m_nMIDIMonitor,      CUIButton::BtnEventMonitor)) return;
+        if (handleButton(m_UI.m_nMIDICompare,      CUIButton::BtnEventCompare)) return;
+        if (handleButton(m_UI.m_nMIDIEnter,        CUIButton::BtnEventEnter)) return;
+
+        if (m_UI.m_nMIDIUp != 0 && note == m_UI.m_nMIDIUp) {
+            if (pressed) mcu.MCU_EncoderTrigger(1);
+            return;
+        }
+        if (m_UI.m_nMIDIDown != 0 && note == m_UI.m_nMIDIDown) {
+            if (pressed) mcu.MCU_EncoderTrigger(0);
+            return;
+        }
+        if (m_UI.m_nMIDISaveNVRAM != 0 && note == m_UI.m_nMIDISaveNVRAM) {
+            if (pressed) SaveNVRAMIncremental();
+            return;
+        }
+    }
+
+    // ===== Priority 2: Musical Note On/Off =====
     if ((status & 0xF0) == 0x80 || (status & 0xF0) == 0x90) {
         if (nLength == 3) {
             mcu.postMidiSC55(pData, nLength);
@@ -340,7 +397,7 @@ void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
         }
     }
 
-    // ===== Priority 2: Pitch Bend =====
+    // ===== Priority 3: Pitch Bend =====
     if ((status & 0xF0) == 0xE0) {
         if (nLength == 3) {
             mcu.postMidiSC55(pData, nLength);
@@ -348,13 +405,13 @@ void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
         }
     }
 
-    // ===== Priority 3: Modulation (CC 1) =====
+    // ===== Priority 4: Modulation (CC 1) =====
     if ((status & 0xF0) == 0xB0 && nLength == 3 && pData[1] == 1) {
         mcu.postMidiSC55(pData, nLength);
         return;
     }
 
-    // ===== Priority 4: Bank Switch (CC 0 MSB and CC 32 LSB) =====
+    // ===== Priority 5: Bank Switch (CC 0 MSB and CC 32 LSB) =====
     if ((status & 0xF0) == 0xB0 && nLength == 3) {
         uint8_t channel = status & 0x0F;
         
@@ -395,75 +452,82 @@ void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
         }
     }
 
-    // ===== Priority 5: NVRAM Save Trigger =====
-    if ((status & 0xF0) == 0xB0 && nLength == 3 && pData[1] == m_UI.m_nMIDISaveNVRAM && pData[2] == 0) {
-        SaveNVRAMIncremental();
-        return;
-    }
+    // ===== Priority 6: UI Control Change messages =====
+    // In Notes mode only the relative MIDI encoder remains on CC.
+    // In legacy CC mode the buttons, Up/Down and NVRAM command also use CC.
+    if ((status & 0xF0) == 0xB0 && nLength == 3
+        && MIDIButtonChannelMatches(status & 0x0F))
+    {
+        const uint8_t ccNumber = pData[1] & 0x7F;
+        const uint8_t ccValue = pData[2] & 0x7F;
 
-    // ===== Priority 6: UI CC Messages =====
-    if ((status & 0xF0) == 0xB0 && nLength == 3) {
-        uint8_t ccNumber = pData[1];
-        uint8_t ccValue  = pData[2];
+        if (!m_UI.m_bMIDIButtonsUseNotes)
+        {
+            if (m_UI.m_nMIDISaveNVRAM != 0
+                && ccNumber == m_UI.m_nMIDISaveNVRAM && ccValue < 64)
+            {
+                SaveNVRAMIncremental();
+                return;
+            }
 
-        if (m_UI.m_nMIDIButtonChannel != 0) {
-            uint8_t channel = status & 0x0F;
-            uint8_t expected = m_UI.m_nMIDIButtonChannel - 1;
-
-            if (m_UI.m_nMIDIButtonChannel == 17 || expected == channel) {
-                auto handleButton = [this, ccNumber, ccValue](uint8_t confCC, CUIButton::BtnEvent ev) {
-                    if (ccNumber == confCC) {
-                        if (ccValue < 64) m_UI.TriggerUIButtonEvent(ev);
-                        else m_UI.TriggerUIButtonEvent(CUIButton::BtnEventRelease);
-                        //LOGNOTE("Led state midi: 0x%08X", mcu.jv880_led_state);
-                        return true;
-                    }
-                    return false;
-                };
-
-                if (handleButton(m_UI.m_nMIDIPreview,      CUIButton::BtnEventPreview)) return;
-                if (handleButton(m_UI.m_nMIDILeft,         CUIButton::BtnEventLeft))    return;
-                if (handleButton(m_UI.m_nMIDIRight,        CUIButton::BtnEventRight))   return;
-                if (handleButton(m_UI.m_nMIDIData,         CUIButton::BtnEventData))    return;
-                if (handleButton(m_UI.m_nMIDIToneSelect,   CUIButton::BtnEventToneSelect)) return;
-                if (handleButton(m_UI.m_nMIDIPatchPerform, CUIButton::BtnEventPatchPerform)) return;
-                if (handleButton(m_UI.m_nMIDIEdit,         CUIButton::BtnEventEdit))    return;
-                if (handleButton(m_UI.m_nMIDISystem,       CUIButton::BtnEventSystem))  return;
-                if (handleButton(m_UI.m_nMIDIRhythm,       CUIButton::BtnEventRhythm))  return;
-                if (handleButton(m_UI.m_nMIDIUtility,      CUIButton::BtnEventUtility)) return;
-                if (handleButton(m_UI.m_nMIDIMute,         CUIButton::BtnEventMute))    return;
-                if (handleButton(m_UI.m_nMIDIMonitor,      CUIButton::BtnEventMonitor)) return;
-                if (handleButton(m_UI.m_nMIDICompare,      CUIButton::BtnEventCompare)) return;
-                if (handleButton(m_UI.m_nMIDIEnter,        CUIButton::BtnEventEnter))   return;
-
-                // Encoder emulate by buttons
-                if (ccNumber == m_UI.m_nMIDIUp && ccValue < 64) {
-                    m_UI.TriggerUIButtonEvent(CUIButton::BtnEventRelease);
-                    mcu.MCU_EncoderTrigger(1);
-                    return;
+            auto handleButton = [this, ccNumber, ccValue](uint8_t configuredCC,
+                                                           CUIButton::BtnEvent event) {
+                if (configuredCC != 0 && ccNumber == configuredCC) {
+                    m_UI.TriggerUIButtonEvent(ccValue < 64
+                        ? event
+                        : CUIButton::BtnEventRelease);
+                    return true;
                 }
-                if (ccNumber == m_UI.m_nMIDIDown && ccValue < 64) {
-                    m_UI.TriggerUIButtonEvent(CUIButton::BtnEventRelease);
-                    mcu.MCU_EncoderTrigger(0);
-                    return;
-                }
-                // MIDI encoder
-                if (m_UI.m_nMIDIEncoder) {
-                    if (ccNumber == m_UI.m_nMIDIEncoderCC) {
-                        if ((m_UI.m_nMIDIEncoderUp == 0 && ccValue < 64) || 
-                            (m_UI.m_nMIDIEncoderUp != 0 && ccValue > 64)) {
-                            m_UI.TriggerUIButtonEvent(CUIButton::BtnEventRelease);
-                            mcu.MCU_EncoderTrigger(1);
-                            return; 
-                        }
-                        if ((m_UI.m_nMIDIEncoderDown == 0 && ccValue < 64) || 
-                            (m_UI.m_nMIDIEncoderDown != 0 && ccValue > 64)) {
-                            m_UI.TriggerUIButtonEvent(CUIButton::BtnEventRelease);
-                            mcu.MCU_EncoderTrigger(0);
-                            return; 
-                        }
-                    }
-                }
+                return false;
+            };
+
+            if (handleButton(m_UI.m_nMIDIPreview,      CUIButton::BtnEventPreview)) return;
+            if (handleButton(m_UI.m_nMIDILeft,         CUIButton::BtnEventLeft)) return;
+            if (handleButton(m_UI.m_nMIDIRight,        CUIButton::BtnEventRight)) return;
+            if (handleButton(m_UI.m_nMIDIData,         CUIButton::BtnEventData)) return;
+            if (handleButton(m_UI.m_nMIDIToneSelect,   CUIButton::BtnEventToneSelect)) return;
+            if (handleButton(m_UI.m_nMIDIPatchPerform, CUIButton::BtnEventPatchPerform)) return;
+            if (handleButton(m_UI.m_nMIDIEdit,         CUIButton::BtnEventEdit)) return;
+            if (handleButton(m_UI.m_nMIDISystem,       CUIButton::BtnEventSystem)) return;
+            if (handleButton(m_UI.m_nMIDIRhythm,       CUIButton::BtnEventRhythm)) return;
+            if (handleButton(m_UI.m_nMIDIUtility,      CUIButton::BtnEventUtility)) return;
+            if (handleButton(m_UI.m_nMIDIMute,         CUIButton::BtnEventMute)) return;
+            if (handleButton(m_UI.m_nMIDIMonitor,      CUIButton::BtnEventMonitor)) return;
+            if (handleButton(m_UI.m_nMIDICompare,      CUIButton::BtnEventCompare)) return;
+            if (handleButton(m_UI.m_nMIDIEnter,        CUIButton::BtnEventEnter)) return;
+
+            if (m_UI.m_nMIDIUp != 0
+                && ccNumber == m_UI.m_nMIDIUp && ccValue < 64)
+            {
+                m_UI.TriggerUIButtonEvent(CUIButton::BtnEventRelease);
+                mcu.MCU_EncoderTrigger(1);
+                return;
+            }
+            if (m_UI.m_nMIDIDown != 0
+                && ccNumber == m_UI.m_nMIDIDown && ccValue < 64)
+            {
+                m_UI.TriggerUIButtonEvent(CUIButton::BtnEventRelease);
+                mcu.MCU_EncoderTrigger(0);
+                return;
+            }
+        }
+
+        // The relative encoder remains a CC in both MIDIButtons modes.
+        if (m_UI.m_nMIDIEncoder && ccNumber == m_UI.m_nMIDIEncoderCC)
+        {
+            if ((m_UI.m_nMIDIEncoderUp == 0 && ccValue < 64)
+                || (m_UI.m_nMIDIEncoderUp != 0 && ccValue > 64))
+            {
+                m_UI.TriggerUIButtonEvent(CUIButton::BtnEventRelease);
+                mcu.MCU_EncoderTrigger(1);
+                return;
+            }
+            if ((m_UI.m_nMIDIEncoderDown == 0 && ccValue < 64)
+                || (m_UI.m_nMIDIEncoderDown != 0 && ccValue > 64))
+            {
+                m_UI.TriggerUIButtonEvent(CUIButton::BtnEventRelease);
+                mcu.MCU_EncoderTrigger(0);
+                return;
             }
         }
     }

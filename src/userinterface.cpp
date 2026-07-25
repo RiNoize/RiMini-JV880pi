@@ -74,6 +74,7 @@ bool CUserInterface::Initialize (void)
 	assert (m_pConfig);
 
 	// Cache MIDI button configuration
+	m_bMIDIButtonsUseNotes = m_pConfig->GetMIDIButtonsUseNotes();
     m_nMIDIButtonChannel = 	m_pConfig->GetMIDIButtonCh();
     m_nMIDIPreview = 		m_pConfig->GetMIDIButtonPreview() & 0x7F;
     m_nMIDILeft = 			m_pConfig->GetMIDIButtonLeft() & 0x7F;
@@ -661,49 +662,8 @@ void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 
 	const u16 ledState = emuActive ? m_pMiniJV880->mcu.jv880_led_state : 0;
 
-	if (m_pConfig->GetDisplayInterfaceExtended ())
-	{
-		// IE: row 2 is intentionally blank. Row 3 is the section header.
-		// The Vol/Pan value slots are placeholders in this first IE stage;
-		// the MIDI bank/pickup implementation will replace them with live values.
-		PutVirtualText (frame[3], 0,
-			(ledState & (1 << 5)) != 0 ? "Ptch" : "Perf");
-		PutVirtualText (frame[3], 5,  "Ton1");
-		PutVirtualText (frame[3], 10, "Ton2");
-		PutVirtualText (frame[3], 15, "Ton3");
-		PutVirtualText (frame[3], 20, "Ton4");
-
-		for (unsigned column = 5; column <= 20; column += 5)
-		{
-			PutVirtualText (frame[4], column, "Vol");
-			PutVirtualText (frame[5], column, "---");
-			PutVirtualText (frame[6], column, "Pan");
-			PutVirtualText (frame[7], column, "---");
-		}
-
-		// Temporary service messages use the last two IE rows and disappear
-		// automatically after the existing three-second timeout.
-		if (showService)
-		{
-			memset (frame[6], ' ', VIRTUAL_DISPLAY_COLS);
-			memset (frame[7], ' ', VIRTUAL_DISPLAY_COLS);
-			for (unsigned row = 0; row < 2; ++row)
-			{
-				const unsigned length = g_ServiceLine[row].GetLength ();
-				for (unsigned col = 0;
-					col < VIRTUAL_DISPLAY_COLS && col < length;
-					++col)
-				{
-					const char ch = g_ServiceLine[row][col];
-					frame[row + 6][col] = ch >= 32 && ch <= 126 ? ch : ' ';
-				}
-			}
-		}
-
-		return;
-	}
-
-	// IO: preserve the original four-row information in rows 0..3.
+	// Rows 2 and 3 always preserve the original Mini-JV880pi four-row
+	// interface. This is the same information shown on a 2004 display.
 	if (showService)
 	{
 		for (unsigned row = 0; row < 2; ++row)
@@ -743,6 +703,31 @@ void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 				PutVirtualText (frame[2 + index / 5], (index % 5) * 5, name);
 		}
 	}
+
+	if (!m_pConfig->GetDisplayInterfaceExtended ())
+		return;
+
+	// IE only adds information in rows 4..7. Rows 0..3 above remain the
+	// unmodified original interface in Patch, Performance, Edit and System.
+	// Tone names stay visible even when the current Patch does not use them.
+	PutVirtualText (frame[4], 0,
+		(ledState & (1 << 5)) != 0 ? "Ptch" : "Perf");
+	PutVirtualText (frame[4], 5,  "Ton1");
+	PutVirtualText (frame[4], 10, "Ton2");
+	PutVirtualText (frame[4], 15, "Ton3");
+	PutVirtualText (frame[4], 20, "Ton4");
+
+	PutVirtualText (frame[5], 0, "Vol");
+	PutVirtualText (frame[6], 0, "Pan");
+	for (unsigned column = 5; column <= 20; column += 5)
+	{
+		PutVirtualText (frame[5], column, "---");
+		PutVirtualText (frame[6], column, "---");
+	}
+
+	// Row 7 is intentionally reserved for the next IE stage (Tone state,
+	// parameter bank or pickup indication). No synthesized values are shown.
+
 }
 
 void CUserInterface::RenderHDMIDisplay(unsigned long currentTime,
@@ -906,10 +891,10 @@ void CUserInterface::RenderDisplay()
     BuildVirtualDisplayFrame(virtualFrame, emuActive, showService);
     RenderHDMIDisplay(currentTime, virtualFrame);
 
-    // IE on a 128x64 graphic display: write the exact same 25x8 frame
-    // that is mirrored on HDMI. Wider displays are padded; narrower ones
-    // are clipped without changing the virtual 128x64 geometry.
-    if (m_pConfig->GetDisplayInterfaceExtended() && displayRows >= 8)
+    // A 128x64 graphic display always receives the exact same 25x8 frame
+    // mirrored on HDMI. In IO, rows 4..7 remain blank. In IE, those rows
+    // contain the extension while rows 0..3 remain the original interface.
+    if (displayRows >= 8)
     {
         for (int row = 0; row < displayRows; ++row)
         {

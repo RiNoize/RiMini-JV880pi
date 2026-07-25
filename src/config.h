@@ -162,6 +162,8 @@ public:
 	const char *GetButtonActionSaveNVRAM (void) const;
 
 	// MIDI buttons navigation
+	// false = Control Change (legacy), true = Note On/Off
+	bool GetMIDIButtonsUseNotes (void) const;
 	unsigned GetMIDIButtonCh   (void) const;
 	unsigned GetMIDIButtonPreview (void) const;
     unsigned GetMIDIButtonLeft (void) const;
@@ -307,6 +309,7 @@ private:
 	std::string m_ButtonActionDown;
 	std::string m_ButtonActionSaveNVRAM;
 	
+	bool m_bMIDIButtonsUseNotes;
 	unsigned m_nMIDIButtonCh;
 	unsigned m_nMIDIButtonPreview;
     unsigned m_nMIDIButtonLeft;

@@ -735,24 +735,20 @@ void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 
 	// IE only adds information in rows 4..7. Rows 0..3 above remain the
 	// unmodified original interface in Patch, Performance, Edit and System.
-	// Tone names stay visible even when the current Patch does not use them.
-	PutVirtualText (frame[4], 0,
-		(ledState & (1 << 5)) != 0 ? "Ptch" : "Perf");
-	PutVirtualText (frame[4], 5,  "Ton1");
-	PutVirtualText (frame[4], 10, "Ton2");
-	PutVirtualText (frame[4], 15, "Ton3");
-	PutVirtualText (frame[4], 20, "Ton4");
+	// The original IO already supplies the Ptch/Ton1..Ton4 heading when the
+	// current mode requires it, so IE uses all four lower rows for parameters.
+	PutVirtualText (frame[4], 0, "Vol");
+	PutVirtualText (frame[5], 0, "Pan");
+	PutVirtualText (frame[6], 0, "Rev");
+	PutVirtualText (frame[7], 0, "Cho");
 
-	PutVirtualText (frame[5], 0, "Vol");
-	PutVirtualText (frame[6], 0, "Pan");
 	for (unsigned column = 5; column <= 20; column += 5)
 	{
+		PutVirtualText (frame[4], column, "---");
 		PutVirtualText (frame[5], column, "---");
 		PutVirtualText (frame[6], column, "---");
+		PutVirtualText (frame[7], column, "---");
 	}
-
-	// Row 7 is intentionally reserved for the next IE stage (Tone state,
-	// parameter bank or pickup indication). No synthesized values are shown.
 
 }
 

@@ -94,6 +94,15 @@ public:
 	bool     GetSH1106LCDRotate (void) const;
 	bool     GetSH1106LCDMirror (void) const;
 
+	// ST7920 LCD (128x64, three-wire serial mode)
+	bool     GetST7920Enabled (void) const;
+	unsigned GetST7920SelectPin (void) const;
+	unsigned GetST7920DataPin (void) const;
+	unsigned GetST7920ClockPin (void) const;
+	unsigned GetST7920ResetPin (void) const;
+	bool     GetST7920Rotate (void) const;
+	bool     GetST7920Mirror (void) const;
+
 	// HDMI virtual front-panel display
 	bool     GetHDMIDisplayEnabled (void) const;
 	unsigned GetHDMIDisplayScale (void) const;       // 0 = automatic
@@ -249,6 +258,14 @@ private:
 	unsigned m_nSH1106LCDI2CAddress;
 	bool     m_bSH1106LCDRotate;
 	bool     m_bSH1106LCDMirror;
+
+	bool     m_bST7920Enabled;
+	unsigned m_nST7920SelectPin;
+	unsigned m_nST7920DataPin;
+	unsigned m_nST7920ClockPin;
+	unsigned m_nST7920ResetPin;
+	bool     m_bST7920Rotate;
+	bool     m_bST7920Mirror;
 
 	bool     m_bHDMIDisplayEnabled;
 	unsigned m_nHDMIDisplayScale;

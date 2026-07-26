@@ -174,10 +174,36 @@ bool CUserInterface::LCDInit()
 		unsigned i2caddr = m_pConfig->GetLCDI2CAddress ();
 		unsigned ssd1306addr = m_pConfig->GetSSD1306LCDI2CAddress ();
 		unsigned sh1106addr = m_pConfig->GetSH1106LCDI2CAddress ();
+		bool st7920 = m_pConfig->GetST7920Enabled ();
 		bool st7789 = m_pConfig->GetST7789Enabled ();
 		unsigned lcdColumns = m_pConfig->GetLCDColumns(); // Get number of columns
 		
-		if (sh1106addr != 0) {
+		if (st7920)
+		{
+			// The ST7920 is always a 128x64 graphic display. Its logical
+			// character geometry is fixed at 25 columns by 8 rows so it
+			// receives the same virtual panel rendered on HDMI.
+			CST7920Device *pST7920 = new CST7920Device (
+				25, 8,
+				m_pConfig->GetST7920SelectPin (),
+				m_pConfig->GetST7920DataPin (),
+				m_pConfig->GetST7920ClockPin (),
+				m_pConfig->GetST7920ResetPin (),
+				m_pConfig->GetST7920Rotate (),
+				m_pConfig->GetST7920Mirror ()
+			);
+
+			if (!pST7920->Initialize ())
+			{
+				LOGDBG ("LCD: ST7920 initialization failed");
+				delete pST7920;
+				return false;
+			}
+
+			LOGDBG ("LCD: ST7920 (128x64 serial, 25x8 characters)");
+			m_pLCD = pST7920;
+		}
+		else if (sh1106addr != 0) {
 			CSH1106Device *pSH1106 = new CSH1106Device (
 				m_pConfig->GetLCDColumns (),
 				m_pConfig->GetLCDRows (),
@@ -859,8 +885,10 @@ void CUserInterface::RenderDisplay()
 {
     // Clear screen and hide cursor
     CString Msg("\x1B[H\x1B[?25l");
-    int displayCols = m_pConfig->GetLCDColumns();
-    int displayRows = m_pConfig->GetLCDRows();
+    // ST7920 uses the fixed 25x8 logical framebuffer mirrored on HDMI.
+    // LCDColumns/LCDRows remain unchanged for HD44780 and other displays.
+    int displayCols = m_pConfig->GetST7920Enabled() ? 25 : m_pConfig->GetLCDColumns();
+    int displayRows = m_pConfig->GetST7920Enabled() ? 8 : m_pConfig->GetLCDRows();
     unsigned long currentTime = CTimer::GetClockTicks();
 
     bool emuActive = (m_pMiniJV880->mcu.mcu.pc != 0);

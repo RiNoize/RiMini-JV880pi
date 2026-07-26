@@ -78,6 +78,14 @@ void CConfig::Load (void)
 	m_bSH1106LCDRotate = m_Properties.GetNumber ("SH1106LCDRotate", 0) != 0;
 	m_bSH1106LCDMirror = m_Properties.GetNumber ("SH1106LCDMirror", 0) != 0;
 
+	m_bST7920Enabled = m_Properties.GetNumber ("ST7920Enabled", 0) != 0;
+	m_nST7920SelectPin = m_Properties.GetNumber ("ST7920SelectPin", 4);
+	m_nST7920DataPin = m_Properties.GetNumber ("ST7920DataPin", 22);
+	m_nST7920ClockPin = m_Properties.GetNumber ("ST7920ClockPin", 17);
+	m_nST7920ResetPin = m_Properties.GetNumber ("ST7920ResetPin", 23);
+	m_bST7920Rotate = m_Properties.GetNumber ("ST7920Rotate", 0) != 0;
+	m_bST7920Mirror = m_Properties.GetNumber ("ST7920Mirror", 0) != 0;
+
 	m_bHDMIDisplayEnabled = m_Properties.GetNumber ("HDMIDisplayEnabled", 1) != 0;
 	m_nHDMIDisplayScale = m_Properties.GetNumber ("HDMIDisplayScale", 0);
 	m_nHDMILogRows = m_Properties.GetNumber ("HDMILogRows", 6);
@@ -324,6 +332,41 @@ bool CConfig::GetSH1106LCDRotate (void) const
 bool CConfig::GetSH1106LCDMirror (void) const
 {
 	return m_bSH1106LCDMirror;
+}
+
+bool CConfig::GetST7920Enabled (void) const
+{
+	return m_bST7920Enabled;
+}
+
+unsigned CConfig::GetST7920SelectPin (void) const
+{
+	return m_nST7920SelectPin;
+}
+
+unsigned CConfig::GetST7920DataPin (void) const
+{
+	return m_nST7920DataPin;
+}
+
+unsigned CConfig::GetST7920ClockPin (void) const
+{
+	return m_nST7920ClockPin;
+}
+
+unsigned CConfig::GetST7920ResetPin (void) const
+{
+	return m_nST7920ResetPin;
+}
+
+bool CConfig::GetST7920Rotate (void) const
+{
+	return m_bST7920Rotate;
+}
+
+bool CConfig::GetST7920Mirror (void) const
+{
+	return m_bST7920Mirror;
 }
 
 bool CConfig::GetHDMIDisplayEnabled (void) const

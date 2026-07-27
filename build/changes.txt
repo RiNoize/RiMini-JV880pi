@@ -1,3 +1,7 @@
+1.1.0 - Generic MIDI surface buttons fix
+Added generic 16-button MIDI input mapping for Patch Tone Switch/Select, Performance Part On/Off, four pot-bank selectors, expansion navigation and bank navigation.
+No MIDI feedback, no controller-specific code, and no emulator-core changes.
+
 1.1.0
 Fixed buttons send to Nuked SC55
 Turned on internal resampler to 64 khz

@@ -541,10 +541,11 @@ ButtonActionSaveNVRAM=longpress
 DoubleClickTimeout=400
 LongPressTimeout=400
 
-# MIDI Channel for receive button commands
-# 1-16, if set 17 - commands received from any channel
-MIDIButtonCh=17
-# MIDI CC commands
+# MIDI buttons transport: Notes is recommended for the Launch Control XL.
+MIDIButtonsMode=Notes
+# MIDI Channel for receive button commands (17 = Omni)
+MIDIButtonCh=15
+# MIDI note numbers in Notes mode; CC numbers in legacy CC mode.
 MIDIButtonPreview=46
 MIDIButtonLeft=47
 MIDIButtonRight=48
@@ -561,7 +562,7 @@ MIDIButtonCompare=58
 MIDIButtonEnter=59
 MIDIButtonUp=60
 MIDIButtonDown=61
-MIDISaveNVRAM=56
+MIDISaveNVRAM=63
 
 # MIDI Encoder Enabled
 MIDIEncoder=1
@@ -570,6 +571,52 @@ MIDIEncoderCC=62
 # if not 0 mean >64
 MIDIEncoderUp=1
 MIDIEncoderDown=0
+
+# Novation Launch Control XL / 8-track control surface
+# 0=off, 1-16=specific channel, 17=Omni. Keep it separate from note-playing channels.
+MIDISurfaceEnabled=1
+MIDISurfaceCh=15
+
+# Roland JV-880 Device ID: decimal 16 = Unit Number 17.
+MIDISurfaceDeviceID=16
+
+# LED feedback uses the same USB-MIDI port in both directions.
+# Template 0 = User 1 on the Launch Control XL.
+MIDISurfaceLEDFeedback=1
+MIDISurfaceTemplate=0
+
+# Four rows of eight controls.
+MIDISurfaceFadersCCStart=16
+MIDISurfacePotRow1CCStart=24
+MIDISurfacePotRow2CCStart=32
+MIDISurfacePotRow3CCStart=40
+
+# Soft takeover: a physical pot/fader must reach or cross the stored value.
+MIDISurfacePickup=1
+MIDISurfacePickupRange=2
+
+# Buttons 1-8: Patch = Tone Switch 1-4 + Tone Select 1-4.
+#              Performance = Part 1-8 On/Off.
+# Buttons 9-12: Pot banks 1-4.
+# Buttons 13-14: Expansion Down/Up.
+# Buttons 15-16: Bank Down/Up inside the current expansion.
+# Values are Notes when MIDIButtonsMode=Notes (recommended).
+MIDISurfaceButton1=64
+MIDISurfaceButton2=65
+MIDISurfaceButton3=66
+MIDISurfaceButton4=67
+MIDISurfaceButton5=68
+MIDISurfaceButton6=69
+MIDISurfaceButton7=70
+MIDISurfaceButton8=71
+MIDISurfaceButton9=72
+MIDISurfaceButton10=73
+MIDISurfaceButton11=74
+MIDISurfaceButton12=75
+MIDISurfaceButton13=76
+MIDISurfaceButton14=77
+MIDISurfaceButton15=78
+MIDISurfaceButton16=79
 
 # KY-040 Rotary Encoder
 EncoderEnabled=1
@@ -637,6 +684,11 @@ const T = {
   EncoderPinData:  'GPIO → KY-040 DT (B) output.',
   DoubleClickTimeout:'Max milliseconds between two clicks to register as double-click.',
   LongPressTimeout:'Milliseconds a button must be held for long press. Cannot be lower than double-click timeout.',
+  MIDISurfaceEnabled:'Enable the dedicated Launch Control XL mapping, polling and LED feedback.',
+  MIDISurfaceCh:'MIDI channel used by all 32 pots/faders and 16 surface buttons. 17 = Omni.',
+  MIDISurfaceLEDFeedback:'Send bidirectional SysEx feedback so LEDs follow the loaded Patch or Performance.',
+  MIDISurfaceTemplate:'Launch Control XL User template number. 0 = User 1.',
+  MIDISurfacePickup:'Soft takeover prevents parameter jumps after changing Patch, Performance or bank.',
   MIDIButtonCh:    'MIDI receive channel for CC button messages. 1–16 = specific channel. 17 = Omni (any channel).',
   MIDISaveNVRAM:   'MIDI CC number that saves NVRAM state to disk.',
   MIDIEncoder:     'Simulate the physical rotary encoder via a MIDI CC message.',
@@ -1059,7 +1111,8 @@ function build(){
   // ── MIDI Buttons ─────────────────────────────────────────
   secLabel(root,'MIDI Control');
   {
-    const {card,body}=mkCard('MIDI Button Mapping','Control synthesizer buttons via MIDI CC. CC < 64 = released, CC > 64 = pressed. Set channel 17 for Omni mode.');
+    const {card,body}=mkCard('MIDI Button Mapping','Use Notes for buttons so CC numbers remain free for pots and faders.');
+    mkRow('Transport mode','MIDI Buttons Mode',mkSel([['Notes','Notes'],['CC','Legacy CC']],gV('MIDIButtonsMode')||'Notes',gI('MIDIButtonsMode'),'130px'),'MIDIButtonsMode',body);
     mkRow('Receive channel (17 = Omni)','MIDI Button Ch',mkInp(gI('MIDIButtonCh'),gV('MIDIButtonCh'),'66px',true),'MIDIButtonCh',body);
     const tbl=el('table','btbl');
     const thead=el('thead'); thead.innerHTML='<tr><th>Button</th><th>CC Number</th><th></th></tr>'; tbl.appendChild(thead);
@@ -1082,6 +1135,40 @@ function build(){
     tbl.appendChild(tbody);
     body.appendChild(tbl);
     root.appendChild(card);
+  }
+
+  // ── Launch Control XL surface ─────────────────────────────
+  {
+    const surfOn=isON('MIDISurfaceEnabled');
+    const {card,body}=mkCard('Launch Control XL Surface','Four rows of eight controls, 16 buttons and synchronized LED feedback.',surfOn);
+    card.id='card-surface';
+    mkRow('Surface enabled','MIDI Surface Enabled',mkBool(gI('MIDISurfaceEnabled'),gV('MIDISurfaceEnabled')),'MIDISurfaceEnabled',body);
+    mkRow('Surface channel (17 = Omni)','MIDI Surface Ch',mkInp(gI('MIDISurfaceCh'),gV('MIDISurfaceCh'),'66px',true),'MIDISurfaceCh',body);
+    mkRow('Roland Device ID','MIDI Surface Device ID',mkInp(gI('MIDISurfaceDeviceID'),gV('MIDISurfaceDeviceID'),'66px',true),'MIDISurfaceDeviceID',body);
+    mkRow('LED feedback','MIDI Surface LED Feedback',mkBool(gI('MIDISurfaceLEDFeedback'),gV('MIDISurfaceLEDFeedback')),'MIDISurfaceLEDFeedback',body);
+    mkRow('Launch Control template','MIDI Surface Template',mkInp(gI('MIDISurfaceTemplate'),gV('MIDISurfaceTemplate'),'66px',true),'MIDISurfaceTemplate',body);
+    mkRow('Faders CC start','MIDI Surface Faders CC Start',mkInp(gI('MIDISurfaceFadersCCStart'),gV('MIDISurfaceFadersCCStart'),'66px',true),'MIDISurfaceFadersCCStart',body);
+    mkRow('Top pots CC start','MIDI Surface Pot Row 1 CC Start',mkInp(gI('MIDISurfacePotRow1CCStart'),gV('MIDISurfacePotRow1CCStart'),'66px',true),'MIDISurfacePotRow1CCStart',body);
+    mkRow('Middle pots CC start','MIDI Surface Pot Row 2 CC Start',mkInp(gI('MIDISurfacePotRow2CCStart'),gV('MIDISurfacePotRow2CCStart'),'66px',true),'MIDISurfacePotRow2CCStart',body);
+    mkRow('Bottom pots CC start','MIDI Surface Pot Row 3 CC Start',mkInp(gI('MIDISurfacePotRow3CCStart'),gV('MIDISurfacePotRow3CCStart'),'66px',true),'MIDISurfacePotRow3CCStart',body);
+    mkRow('Soft takeover','MIDI Surface Pickup',mkBool(gI('MIDISurfacePickup'),gV('MIDISurfacePickup')),'MIDISurfacePickup',body);
+    mkRow('Pickup range','MIDI Surface Pickup Range',mkInp(gI('MIDISurfacePickupRange'),gV('MIDISurfacePickupRange'),'66px',true),'MIDISurfacePickupRange',body);
+
+    const tbl=el('table','btbl');
+    const thead=el('thead'); thead.innerHTML='<tr><th>Surface button</th><th>Note / CC</th><th>Function</th></tr>'; tbl.appendChild(thead);
+    const tbody=el('tbody');
+    const funcs=['Tone SW 1 / Part 1','Tone SW 2 / Part 2','Tone SW 3 / Part 3','Tone SW 4 / Part 4',
+      'Tone Select 1 / Part 5','Tone Select 2 / Part 6','Tone Select 3 / Part 7','Tone Select 4 / Part 8',
+      'Pot Bank 1','Pot Bank 2','Pot Bank 3','Pot Bank 4','Expansion Down','Expansion Up','Bank Down','Bank Up'];
+    for(let i=1;i<=16;i++){
+      const key='MIDISurfaceButton'+i;
+      const tr=el('tr');
+      const tdN=el('td'); tdN.textContent=String(i); tdN.style.fontWeight='600';
+      const tdC=el('td'); tdC.appendChild(mkInp(gI(key),gV(key),'100%'));
+      const tdF=el('td'); tdF.textContent=funcs[i-1]; tdF.style.fontSize='12px';
+      tr.appendChild(tdN); tr.appendChild(tdC); tr.appendChild(tdF); tbody.appendChild(tr);
+    }
+    tbl.appendChild(tbody); body.appendChild(tbl); root.appendChild(card);
   }
 
   // ── Network ──────────────────────────────────────────────

@@ -195,6 +195,11 @@ public:
 	unsigned GetMIDIEncoderCC (void) const;
 	unsigned GetMIDIEncoderUp (void) const;
 	unsigned GetMIDIEncoderDown (void) const;
+
+	// Generic 16-button MIDI control surface. The assignments use the same
+	// MIDIButtonsMode and MIDIButtonCh settings as the front-panel mappings.
+	bool GetMIDISurfaceButtonsEnabled (void) const;
+	unsigned GetMIDISurfaceButton (unsigned index) const;
 	
 	// Timeouts for button events in milliseconds
 	unsigned GetDoubleClickTimeout (void) const;
@@ -349,6 +354,8 @@ private:
 	unsigned m_nMIDIEncoderCC;
 	unsigned m_nMIDIEncoderUp;
 	unsigned m_nMIDIEncoderDown;
+	bool m_bMIDISurfaceButtonsEnabled;
+	unsigned m_nMIDISurfaceButtons[16];
 	unsigned m_nDoubleClickTimeout;
 	unsigned m_nLongPressTimeout;	
 

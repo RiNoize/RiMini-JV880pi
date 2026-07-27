@@ -181,6 +181,17 @@ void CConfig::Load (void)
 	m_nMIDIEncoderUp = m_Properties.GetNumber("MIDIEncoderUp", 1);
 	m_nMIDIEncoderDown = m_Properties.GetNumber("MIDIEncoderDown", 0);
 
+	m_bMIDISurfaceButtonsEnabled =
+		m_Properties.GetNumber("MIDISurfaceButtonsEnabled", 0) != 0;
+	for (unsigned index = 0; index < 16; ++index)
+	{
+		char propertyName[32];
+		snprintf(propertyName, sizeof propertyName,
+			 "MIDISurfaceButton%u", index + 1);
+		m_nMIDISurfaceButtons[index] =
+			m_Properties.GetNumber(propertyName, 0) & 0x7F;
+	}
+
 	m_nDoubleClickTimeout = m_Properties.GetNumber ("DoubleClickTimeout", 400);
 	m_nLongPressTimeout = m_Properties.GetNumber ("LongPressTimeout", 600);
 
@@ -746,6 +757,16 @@ unsigned CConfig::GetMIDIEncoderUp (void) const
 unsigned CConfig::GetMIDIEncoderDown (void) const
 {
     return m_nMIDIEncoderDown;
+}
+
+bool CConfig::GetMIDISurfaceButtonsEnabled (void) const
+{
+	return m_bMIDISurfaceButtonsEnabled;
+}
+
+unsigned CConfig::GetMIDISurfaceButton (unsigned index) const
+{
+	return index < 16 ? m_nMIDISurfaceButtons[index] : 0;
 }
 
 bool CConfig::GetEncoderEnabled (void) const

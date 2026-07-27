@@ -84,7 +84,12 @@ CMiniJV880::CMiniJV880(CConfig *pConfig, CInterruptSystem *pInterrupt,
                        CGPIOManager *pGPIOManager, CI2CMaster *pI2CMaster, CSPIMaster *pSPIMaster,
                        FATFS *pFileSystem, CScreenDevice *mScreenUnbuffered,
                        CWriteBufferDevice *pHDMIScreen)
-    : CMultiCoreSupport(CMemorySystem::Get()), m_pConfig(pConfig),
+    : CMultiCoreSupport(CMemorySystem::Get()),
+      m_bankMappings(nullptr),
+      m_bankMappingsCount(0),
+      m_bankMappingsCapacity(0),
+      m_currentExpansionRomIndex(static_cast<int>(pConfig->GetExpRom()) + 6),
+      m_pConfig(pConfig),
       m_pFileSystem(pFileSystem), 
       m_Serial(pInterrupt, TRUE),
       m_pSoundDevice(0),
@@ -144,6 +149,9 @@ CMiniJV880::CMiniJV880(CConfig *pConfig, CInterruptSystem *pInterrupt,
 
 CMiniJV880::~CMiniJV880 ()
 {
+    delete[] m_bankMappings;
+    m_bankMappings = nullptr;
+
 	// Cleanup network services (in reverse order of creation)
     if (m_pmDNSPublisher) {
         delete m_pmDNSPublisher;
@@ -203,6 +211,11 @@ bool CMiniJV880::Initialize(void) {
 	m_Serial.SetOptions(ser_options);
    LOGNOTE("Serial MIDI Initialized");
    InitBankMappings();
+   m_currentExpansionRomIndex = static_cast<int>(m_pConfig->GetExpRom()) + 6;
+   {
+       const int initialBank = FindLowestBankForRom(m_currentExpansionRomIndex);
+       m_currentBankNumber = initialBank >= 0 ? initialBank : 0;
+   }
     midiParser.Init(this);
     memset(mcu.lcd.LCD_Data, 0x20, sizeof(mcu.lcd.LCD_Data));
     mcu.mcu.pc=0; //mcu not running   
@@ -267,6 +280,7 @@ void CMiniJV880::Process(bool bPlugAndPlayUpdated) {
     CScheduler* const pScheduler = CScheduler::Get();
 
     m_UI.Process ();
+    ProcessMIDISurfaceButtons();
     pScheduler->Yield();
     
     if (m_pNet) {
@@ -316,6 +330,429 @@ void CMiniJV880::USBMIDIMessageHandler(unsigned nCable, u8 *pPacket,
   s_pThis->midiParser.FeedUSBMIDIPacket(pPacket, nLength);
 }
 
+bool CMiniJV880::HandleMIDISurfaceButton(uint8_t number, bool pressed)
+{
+    if (!m_pConfig->GetMIDISurfaceButtonsEnabled()) return false;
+
+    for (unsigned button = 0; button < 16; ++button)
+    {
+        const unsigned configured = m_pConfig->GetMIDISurfaceButton(button);
+        if (configured == 0 || configured != number) continue;
+
+        // Consume both the press and release so configured surface notes do
+        // not leak through as musical Note On/Off messages.
+        if (!pressed) return true;
+
+        const uint16_t ledState = mcu.jv880_led_state;
+        const bool patchMode = (ledState & (1u << 5)) != 0;
+        const bool menuMode = (ledState & ((1u << 2) | (1u << 3) | (1u << 4))) != 0;
+
+        if (button < 8)
+        {
+            if (menuMode)
+            {
+                m_UI.LCDMessage("MIDI surface\nExit menu first");
+                return true;
+            }
+
+            if (patchMode)
+            {
+                if (button < 4)
+                    QueueMIDISurfaceCommand(SurfaceCommandToneSwitch, button);
+                else
+                    QueueMIDISurfaceCommand(SurfaceCommandToneSelect, button - 4);
+            }
+            else
+            {
+                QueueMIDISurfaceCommand(SurfaceCommandPartToggle, button);
+            }
+            return true;
+        }
+
+        if (button < 12)
+        {
+            m_nMIDIPotBank = button - 7;
+            m_UI.LCDMessage("Pot Bank\n%u", m_nMIDIPotBank);
+            return true;
+        }
+
+        switch (button)
+        {
+        case 12: SelectAdjacentExpansion(false); break;
+        case 13: SelectAdjacentExpansion(true);  break;
+        case 14: SelectAdjacentBank(false);      break;
+        case 15: SelectAdjacentBank(true);       break;
+        default: break;
+        }
+        return true;
+    }
+
+    return false;
+}
+
+void CMiniJV880::QueueMIDISurfaceCommand(uint8_t type, uint8_t index)
+{
+    const unsigned tail = m_nMIDISurfaceQueueTail.load(std::memory_order_relaxed);
+    const unsigned next = (tail + 1) % MIDI_SURFACE_QUEUE_SIZE;
+    if (next == m_nMIDISurfaceQueueHead.load(std::memory_order_acquire))
+    {
+        LOGNOTE("MIDI surface command queue full");
+        return;
+    }
+
+    m_MIDISurfaceQueue[tail].type = type;
+    m_MIDISurfaceQueue[tail].index = index;
+    m_nMIDISurfaceQueueTail.store(next, std::memory_order_release);
+}
+
+bool CMiniJV880::DequeueMIDISurfaceCommand()
+{
+    const unsigned head = m_nMIDISurfaceQueueHead.load(std::memory_order_relaxed);
+    if (head == m_nMIDISurfaceQueueTail.load(std::memory_order_acquire)) return false;
+
+    m_ActiveMIDISurfaceCommand = m_MIDISurfaceQueue[head];
+    m_nMIDISurfaceQueueHead.store((head + 1) % MIDI_SURFACE_QUEUE_SIZE,
+                                  std::memory_order_release);
+    m_nMIDISurfaceCommandStage = 0;
+    m_nMIDISurfaceCursorSteps = 0;
+    m_nMIDISurfaceWaitStarted = CTimer::GetClockTicks();
+    return true;
+}
+
+void CMiniJV880::StartMIDISurfacePulse(uint32_t buttonMask)
+{
+    mcu.mcu_button_pressed = buttonMask;
+    m_bMIDISurfacePulseActive = true;
+    m_bMIDISurfacePulseReleased = false;
+    m_nMIDISurfacePulseDeadline = CTimer::GetClockTicks() + MIDI_SURFACE_PRESS_US;
+}
+
+bool CMiniJV880::ProcessMIDISurfacePulse()
+{
+    if (!m_bMIDISurfacePulseActive) return false;
+
+    const uint32_t now = CTimer::GetClockTicks();
+    if (static_cast<int32_t>(now - m_nMIDISurfacePulseDeadline) < 0) return true;
+
+    if (!m_bMIDISurfacePulseReleased)
+    {
+        mcu.mcu_button_pressed = 0;
+        m_bMIDISurfacePulseReleased = true;
+        m_nMIDISurfacePulseDeadline = now + MIDI_SURFACE_RELEASE_US;
+        return true;
+    }
+
+    m_bMIDISurfacePulseActive = false;
+    return false;
+}
+
+void CMiniJV880::FinishMIDISurfaceCommand()
+{
+    mcu.mcu_button_pressed = 0;
+    m_ActiveMIDISurfaceCommand.type = SurfaceCommandNone;
+    m_ActiveMIDISurfaceCommand.index = 0;
+    m_nMIDISurfaceCommandStage = 0;
+    m_nMIDISurfaceCursorSteps = 0;
+}
+
+int CMiniJV880::FindPerformancePartColumn(unsigned part) const
+{
+    if (part < 1 || part > 8) return -1;
+
+    // Performance Play displays the part selector as an ordered 1..8
+    // sequence on the first LCD line. Locate that sequence rather than
+    // relying on one hard-coded display column.
+    const uint8_t *row = mcu.lcd.LCD_Data;
+    for (int first = 0; first < 40; ++first)
+    {
+        if (row[first] != '1') continue;
+
+        int columns[8] = { first, -1, -1, -1, -1, -1, -1, -1 };
+        int previous = first;
+        bool sequenceFound = true;
+        for (int digit = 2; digit <= 8; ++digit)
+        {
+            int found = -1;
+            const int limit = std::min(previous + 4, 39);
+            for (int col = previous + 1; col <= limit; ++col)
+            {
+                if (row[col] == static_cast<uint8_t>('0' + digit))
+                {
+                    found = col;
+                    break;
+                }
+            }
+            if (found < 0)
+            {
+                sequenceFound = false;
+                break;
+            }
+            columns[digit - 1] = found;
+            previous = found;
+        }
+
+        if (sequenceFound) return columns[part - 1];
+    }
+
+    return -1;
+}
+
+void CMiniJV880::ProcessMIDISurfaceButtons()
+{
+    if (!m_pConfig->GetMIDISurfaceButtonsEnabled()) return;
+    if (ProcessMIDISurfacePulse()) return;
+
+    if (m_ActiveMIDISurfaceCommand.type == SurfaceCommandNone
+        && !DequeueMIDISurfaceCommand()) return;
+
+    static const uint8_t toneSwitchButtons[4] = {
+        MCU_BUTTON_MUTE, MCU_BUTTON_MONITOR,
+        MCU_BUTTON_COMPARE, MCU_BUTTON_ENTER
+    };
+
+    const uint32_t now = CTimer::GetClockTicks();
+    const uint16_t ledState = mcu.jv880_led_state;
+    const bool patchMode = (ledState & (1u << 5)) != 0;
+    const bool editMode = (ledState & (1u << 1)) != 0;
+    const bool menuMode = (ledState & ((1u << 2) | (1u << 3) | (1u << 4))) != 0;
+
+    switch (m_ActiveMIDISurfaceCommand.type)
+    {
+    case SurfaceCommandToneSwitch:
+        if (m_nMIDISurfaceCommandStage == 0)
+        {
+            if (!patchMode || menuMode || m_ActiveMIDISurfaceCommand.index >= 4)
+            {
+                FinishMIDISurfaceCommand();
+                return;
+            }
+            StartMIDISurfacePulse(1u << toneSwitchButtons[m_ActiveMIDISurfaceCommand.index]);
+            m_nMIDISurfaceCommandStage = 1;
+            return;
+        }
+        FinishMIDISurfaceCommand();
+        return;
+
+    case SurfaceCommandToneSelect:
+        if (!patchMode || menuMode || m_ActiveMIDISurfaceCommand.index >= 4)
+        {
+            FinishMIDISurfaceCommand();
+            return;
+        }
+
+        if (m_nMIDISurfaceCommandStage == 0)
+        {
+            if (!editMode)
+            {
+                StartMIDISurfacePulse(1u << MCU_BUTTON_EDIT);
+                m_nMIDISurfaceCommandStage = 1;
+                m_nMIDISurfaceWaitStarted = now;
+                return;
+            }
+            m_nMIDISurfaceCommandStage = 2;
+        }
+
+        if (m_nMIDISurfaceCommandStage == 1)
+        {
+            if (!editMode)
+            {
+                if (now - m_nMIDISurfaceWaitStarted >= MIDI_SURFACE_MODE_WAIT_US)
+                    FinishMIDISurfaceCommand();
+                return;
+            }
+            m_nMIDISurfaceCommandStage = 2;
+        }
+
+        if (m_nMIDISurfaceCommandStage == 2)
+        {
+            const uint32_t mask = (1u << MCU_BUTTON_TONE_SELECT)
+                | (1u << toneSwitchButtons[m_ActiveMIDISurfaceCommand.index]);
+            StartMIDISurfacePulse(mask);
+            m_nMIDISurfaceCommandStage = 3;
+            return;
+        }
+
+        FinishMIDISurfaceCommand();
+        return;
+
+    case SurfaceCommandPartToggle:
+        if (patchMode || menuMode || m_ActiveMIDISurfaceCommand.index >= 8)
+        {
+            FinishMIDISurfaceCommand();
+            return;
+        }
+
+        if (m_nMIDISurfaceCommandStage == 0)
+        {
+            if (editMode)
+            {
+                StartMIDISurfacePulse(1u << MCU_BUTTON_EDIT);
+                m_nMIDISurfaceCommandStage = 1;
+                m_nMIDISurfaceWaitStarted = now;
+                return;
+            }
+            m_nMIDISurfaceCommandStage = 2;
+            m_nMIDISurfaceWaitStarted = now;
+        }
+
+        if (m_nMIDISurfaceCommandStage == 1)
+        {
+            if (editMode)
+            {
+                if (now - m_nMIDISurfaceWaitStarted >= MIDI_SURFACE_MODE_WAIT_US)
+                    FinishMIDISurfaceCommand();
+                return;
+            }
+            m_nMIDISurfaceCommandStage = 2;
+            m_nMIDISurfaceWaitStarted = now;
+        }
+
+        if (m_nMIDISurfaceCommandStage == 3)
+            m_nMIDISurfaceCommandStage = 2;
+
+        if (m_nMIDISurfaceCommandStage == 2)
+        {
+            const unsigned part = m_ActiveMIDISurfaceCommand.index + 1;
+            const int targetColumn = FindPerformancePartColumn(part);
+            if (targetColumn < 0)
+            {
+                if (now - m_nMIDISurfaceWaitStarted >= MIDI_SURFACE_MODE_WAIT_US)
+                    FinishMIDISurfaceCommand();
+                return;
+            }
+
+            const int cursorRow = mcu.lcd.LCD_DD_RAM / 0x40;
+            const int cursorColumn = mcu.lcd.LCD_DD_RAM % 0x40;
+            if (cursorRow == 0 && cursorColumn == targetColumn)
+            {
+                StartMIDISurfacePulse(1u << MCU_BUTTON_MUTE);
+                m_nMIDISurfaceCommandStage = 4;
+                return;
+            }
+
+            if (m_nMIDISurfaceCursorSteps >= MIDI_SURFACE_MAX_CURSOR_STEPS)
+            {
+                FinishMIDISurfaceCommand();
+                return;
+            }
+
+            StartMIDISurfacePulse(1u << MCU_BUTTON_CURSOR_R);
+            ++m_nMIDISurfaceCursorSteps;
+            m_nMIDISurfaceCommandStage = 3;
+            return;
+        }
+
+        FinishMIDISurfaceCommand();
+        return;
+
+    default:
+        FinishMIDISurfaceCommand();
+        return;
+    }
+}
+
+int CMiniJV880::FindRomForBank(int bankNumber) const
+{
+    for (unsigned index = 0; index < m_bankMappingsCount; ++index)
+        if (m_bankMappings[index].bankNumber == bankNumber)
+            return m_bankMappings[index].romIndex;
+    return -1;
+}
+
+int CMiniJV880::FindLowestBankForRom(int romIndex) const
+{
+    int result = -1;
+    for (unsigned index = 0; index < m_bankMappingsCount; ++index)
+    {
+        const BankMapping &mapping = m_bankMappings[index];
+        if (mapping.romIndex != romIndex) continue;
+        if (result < 0 || mapping.bankNumber < result) result = mapping.bankNumber;
+    }
+    return result;
+}
+
+int CMiniJV880::GetCurrentOrPendingBank() const
+{
+    const int pending = m_nPendingBankSwitch.load(std::memory_order_acquire);
+    return pending >= 0 && pending != 0xFF ? pending : m_currentBankNumber;
+}
+
+void CMiniJV880::QueuePatchBankSwitch(int bankNumber)
+{
+    if (FindRomForBank(bankNumber) < 0)
+    {
+        LOGNOTE("Bank %d not found in mapping", bankNumber);
+        return;
+    }
+
+    m_nPendingBankSwitch.store(bankNumber, std::memory_order_release);
+    m_nBankSwitchTimestamp.store(CTimer::GetClockTicks(), std::memory_order_release);
+}
+
+void CMiniJV880::SelectAdjacentExpansion(bool up)
+{
+    if (m_bankMappingsCount == 0) return;
+
+    int currentRom = m_currentExpansionRomIndex;
+    const int pendingRom = FindRomForBank(GetCurrentOrPendingBank());
+    if (pendingRom >= 0) currentRom = pendingRom;
+
+    int lowestRom = -1;
+    int highestRom = -1;
+    int targetRom = -1;
+    for (unsigned index = 0; index < m_bankMappingsCount; ++index)
+    {
+        const int rom = m_bankMappings[index].romIndex;
+        if (lowestRom < 0 || rom < lowestRom) lowestRom = rom;
+        if (highestRom < 0 || rom > highestRom) highestRom = rom;
+
+        if (up && rom > currentRom && (targetRom < 0 || rom < targetRom))
+            targetRom = rom;
+        if (!up && rom < currentRom && (targetRom < 0 || rom > targetRom))
+            targetRom = rom;
+    }
+
+    if (targetRom < 0) targetRom = up ? lowestRom : highestRom;
+    const int targetBank = FindLowestBankForRom(targetRom);
+    if (targetBank < 0) return;
+
+    QueuePatchBankSwitch(targetBank);
+    m_UI.LCDMessage("Expansion %02d\nBank %02d", targetRom - 6, targetBank);
+}
+
+void CMiniJV880::SelectAdjacentBank(bool up)
+{
+    if (m_bankMappingsCount == 0) return;
+
+    const int baseBank = GetCurrentOrPendingBank();
+    int currentRom = FindRomForBank(baseBank);
+    if (currentRom < 0) currentRom = m_currentExpansionRomIndex;
+
+    int lowestBank = -1;
+    int highestBank = -1;
+    int targetBank = -1;
+    for (unsigned index = 0; index < m_bankMappingsCount; ++index)
+    {
+        const BankMapping &mapping = m_bankMappings[index];
+        if (mapping.romIndex != currentRom) continue;
+
+        const int bank = mapping.bankNumber;
+        if (lowestBank < 0 || bank < lowestBank) lowestBank = bank;
+        if (highestBank < 0 || bank > highestBank) highestBank = bank;
+
+        if (up && bank > baseBank && (targetBank < 0 || bank < targetBank))
+            targetBank = bank;
+        if (!up && bank < baseBank && (targetBank < 0 || bank > targetBank))
+            targetBank = bank;
+    }
+
+    if (targetBank < 0) targetBank = up ? lowestBank : highestBank;
+    if (targetBank < 0) return;
+
+    QueuePatchBankSwitch(targetBank);
+    m_UI.LCDMessage("Expansion %02d\nBank %02d", currentRom - 6, targetBank);
+}
+
 void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
 {
     if (nLength == 0) return;
@@ -348,6 +785,8 @@ void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
     {
         const uint8_t note = pData[1] & 0x7F;
         const bool pressed = (status & 0xF0) == 0x90 && pData[2] != 0;
+
+        if (HandleMIDISurfaceButton(note, pressed)) return;
 
         auto handleButton = [this, note, pressed](uint8_t configuredNote,
                                                   CUIButton::BtnEvent event) {
@@ -460,6 +899,9 @@ void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
     {
         const uint8_t ccNumber = pData[1] & 0x7F;
         const uint8_t ccValue = pData[2] & 0x7F;
+
+        if (!m_UI.m_bMIDIButtonsUseNotes
+            && HandleMIDISurfaceButton(ccNumber, ccValue < 64)) return;
 
         if (!m_UI.m_bMIDIButtonsUseNotes)
         {
@@ -1029,6 +1471,9 @@ void CMiniJV880::switchPatchBank(int bankNumber) {
     CTimer::SimpleMsDelay(20);
     std::atomic_thread_fence(std::memory_order_seq_cst);
     
+    m_currentBankNumber = bankNumber;
+    m_currentExpansionRomIndex = romIndex;
+
     size_t freeAfter = CMemorySystem::Get()->GetHeapFreeSpace(HEAP_ANY);
     LOGNOTE("=== BANK SWITCHED TO: %d ROM index %d (%s), free mem=%.2f MB ===", bankNumber, 
             romIndex, rom.filename, (float)freeAfter/(1024.0f*1024.0f));

@@ -541,10 +541,15 @@ ButtonActionSaveNVRAM=longpress
 DoubleClickTimeout=400
 LongPressTimeout=400
 
+# MIDI buttons transport:
+#   Notes = Note On presses; Note Off (or Note On velocity 0) releases.
+#   CC    = legacy mode: value <64 presses; value >63 releases.
+MIDIButtonsMode=Notes
+
 # MIDI Channel for receive button commands
 # 1-16, if set 17 - commands received from any channel
-MIDIButtonCh=17
-# MIDI CC commands
+MIDIButtonCh=15
+# MIDI note numbers in Notes mode; CC numbers in legacy CC mode.
 MIDIButtonPreview=46
 MIDIButtonLeft=47
 MIDIButtonRight=48
@@ -561,7 +566,26 @@ MIDIButtonCompare=58
 MIDIButtonEnter=59
 MIDIButtonUp=60
 MIDIButtonDown=61
-MIDISaveNVRAM=56
+MIDISaveNVRAM=63
+
+# Generic 16-button MIDI control surface (input only)
+MIDISurfaceButtonsEnabled=1
+MIDISurfaceButton1=64
+MIDISurfaceButton2=65
+MIDISurfaceButton3=66
+MIDISurfaceButton4=67
+MIDISurfaceButton5=68
+MIDISurfaceButton6=69
+MIDISurfaceButton7=70
+MIDISurfaceButton8=71
+MIDISurfaceButton9=72
+MIDISurfaceButton10=73
+MIDISurfaceButton11=74
+MIDISurfaceButton12=75
+MIDISurfaceButton13=76
+MIDISurfaceButton14=77
+MIDISurfaceButton15=78
+MIDISurfaceButton16=79
 
 # MIDI Encoder Enabled
 MIDIEncoder=1
@@ -637,8 +661,10 @@ const T = {
   EncoderPinData:  'GPIO → KY-040 DT (B) output.',
   DoubleClickTimeout:'Max milliseconds between two clicks to register as double-click.',
   LongPressTimeout:'Milliseconds a button must be held for long press. Cannot be lower than double-click timeout.',
-  MIDIButtonCh:    'MIDI receive channel for CC button messages. 1–16 = specific channel. 17 = Omni (any channel).',
-  MIDISaveNVRAM:   'MIDI CC number that saves NVRAM state to disk.',
+  MIDIButtonsMode: 'Message type used by button mappings: Notes is recommended; CC keeps compatibility with older controller setups.',
+  MIDIButtonCh:    'MIDI receive channel for button messages. 1–16 = specific channel. 17 = Omni (any channel).',
+  MIDISaveNVRAM:   'MIDI note or CC number that saves NVRAM state to disk, according to MIDI Buttons Mode.',
+  MIDISurfaceButtonsEnabled: 'Enable the generic 16-button control surface. MIDI input only; no LED feedback or controller-specific protocol.',
   MIDIEncoder:     'Simulate the physical rotary encoder via a MIDI CC message.',
   MIDIEncoderCC:   'MIDI CC number assigned to the virtual encoder.',
   MIDIEncoderUp:   'CC value sent when turning clockwise (increment). 0 = value below 64, 1 = value above 64. Default: 1 (CC > 64 = clockwise).',
@@ -1059,10 +1085,11 @@ function build(){
   // ── MIDI Buttons ─────────────────────────────────────────
   secLabel(root,'MIDI Control');
   {
-    const {card,body}=mkCard('MIDI Button Mapping','Control synthesizer buttons via MIDI CC. CC < 64 = released, CC > 64 = pressed. Set channel 17 for Omni mode.');
+    const {card,body}=mkCard('MIDI Button Mapping','Control the original front-panel buttons using MIDI Notes or legacy CC messages. Set channel 17 for Omni mode.');
+    mkRow('Message type','MIDI Buttons Mode',mkSel([['Notes','Notes (recommended)'],['CC','CC (legacy)']],gV('MIDIButtonsMode'),gI('MIDIButtonsMode'),'180px'),'MIDIButtonsMode',body);
     mkRow('Receive channel (17 = Omni)','MIDI Button Ch',mkInp(gI('MIDIButtonCh'),gV('MIDIButtonCh'),'66px',true),'MIDIButtonCh',body);
     const tbl=el('table','btbl');
-    const thead=el('thead'); thead.innerHTML='<tr><th>Button</th><th>CC Number</th><th></th></tr>'; tbl.appendChild(thead);
+    const thead=el('thead'); thead.innerHTML='<tr><th>Button</th><th>Note / CC</th><th></th></tr>'; tbl.appendChild(thead);
     const tbody=el('tbody');
     ['Preview','Left','Right','Data','ToneSelect','PatchPerform','Edit','System','Rhythm','Utility','Mute','Monitor','Compare','Enter','Up','Down'].forEach(name=>{
       const k='MIDIButton'+name;
@@ -1081,6 +1108,51 @@ function build(){
     tbody.appendChild(trS);
     tbl.appendChild(tbody);
     body.appendChild(tbl);
+    root.appendChild(card);
+  }
+  {
+    const surfOn=isON('MIDISurfaceButtonsEnabled');
+    const {card,body}=mkCard('Generic 16-button MIDI Surface','Input-only mapping for any MIDI controller. Patch: Tone Switch/Select. Performance: Part On/Off. The lower row selects pot banks and patch-bank navigation.',surfOn);
+    card.id='card-midi-surface';
+    const sub=dv(surfOn?'':'sub-off'); sub.id='sub-midi-surface';
+    const enRow=dv('row row-enable');
+    const enLbl=dv('row-label'); enLbl.textContent='16-button surface enabled';
+    const enC=dv('row-ctrl'); enC.appendChild(mkBool(gI('MIDISurfaceButtonsEnabled'),gV('MIDISurfaceButtonsEnabled'),on=>{
+      setTV(gI('MIDISurfaceButtonsEnabled'),on?'1':'0');
+      sub.className=on?'':'sub-off';
+      updateCardBadge('card-midi-surface',on);
+    }));
+    const enTip=dv('row-tip'); enTip.appendChild(mkTipBtn('MIDISurfaceButtonsEnabled'));
+    enRow.appendChild(enLbl); enRow.appendChild(enC); enRow.appendChild(enTip);
+    body.appendChild(enRow);
+
+    const labels=[
+      'Patch Tone Switch 1 / Performance Part 1',
+      'Patch Tone Switch 2 / Performance Part 2',
+      'Patch Tone Switch 3 / Performance Part 3',
+      'Patch Tone Switch 4 / Performance Part 4',
+      'Patch Tone Select 1 / Performance Part 5',
+      'Patch Tone Select 2 / Performance Part 6',
+      'Patch Tone Select 3 / Performance Part 7',
+      'Patch Tone Select 4 / Performance Part 8',
+      'Pot Bank 1','Pot Bank 2','Pot Bank 3','Pot Bank 4',
+      'Expansion Down','Expansion Up','Bank Down','Bank Up'
+    ];
+    const tbl=el('table','btbl');
+    const thead=el('thead'); thead.innerHTML='<tr><th>Logical function</th><th>Note / CC</th><th></th></tr>'; tbl.appendChild(thead);
+    const tbody=el('tbody');
+    labels.forEach((label,index)=>{
+      const k='MIDISurfaceButton'+(index+1);
+      const tr=el('tr');
+      const tdN=el('td'); tdN.textContent=label; tdN.style.fontWeight='600';
+      const tdC=el('td'); tdC.appendChild(mkInp(gI(k),gV(k),'100%'));
+      const tdX=el('td');
+      tr.appendChild(tdN); tr.appendChild(tdC); tr.appendChild(tdX);
+      tbody.appendChild(tr);
+    });
+    tbl.appendChild(tbody);
+    sub.appendChild(tbl);
+    body.appendChild(sub);
     root.appendChild(card);
   }
 

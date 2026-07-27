@@ -91,6 +91,22 @@ public:
   bool InitNetwork();
 	void UpdateNetwork();
 
+  // Generic MIDI control-surface buttons (MIDI input only).
+  bool HandleMIDISurfaceButton(uint8_t number, bool pressed);
+  void ProcessMIDISurfaceButtons();
+  void QueueMIDISurfaceCommand(uint8_t type, uint8_t index);
+  bool DequeueMIDISurfaceCommand();
+  void StartMIDISurfacePulse(uint32_t buttonMask);
+  bool ProcessMIDISurfacePulse();
+  void FinishMIDISurfaceCommand();
+  int FindPerformancePartColumn(unsigned part) const;
+  void SelectAdjacentExpansion(bool up);
+  void SelectAdjacentBank(bool up);
+  void QueuePatchBankSwitch(int bankNumber);
+  int GetCurrentOrPendingBank() const;
+  int FindRomForBank(int bankNumber) const;
+  int FindLowestBankForRom(int romIndex) const;
+
 
   MCU mcu;
 
@@ -162,6 +178,39 @@ private:
   std::atomic<uint32_t> m_nBankSwitchTimestamp;
   static constexpr uint32_t BANK_SWITCH_DEBOUNCE_US = 300000; //us 
   std::atomic<bool> m_bAudioPaused{false};
+
+  enum MIDISurfaceCommandType : uint8_t {
+    SurfaceCommandNone = 0,
+    SurfaceCommandToneSwitch,
+    SurfaceCommandToneSelect,
+    SurfaceCommandPartToggle
+  };
+
+  struct MIDISurfaceCommand {
+    uint8_t type;
+    uint8_t index;
+  };
+
+  static constexpr unsigned MIDI_SURFACE_QUEUE_SIZE = 16;
+  static constexpr uint32_t MIDI_SURFACE_PRESS_US = 30000;
+  static constexpr uint32_t MIDI_SURFACE_RELEASE_US = 30000;
+  static constexpr uint32_t MIDI_SURFACE_MODE_WAIT_US = 700000;
+  static constexpr unsigned MIDI_SURFACE_MAX_CURSOR_STEPS = 24;
+
+  MIDISurfaceCommand m_MIDISurfaceQueue[MIDI_SURFACE_QUEUE_SIZE];
+  std::atomic<unsigned> m_nMIDISurfaceQueueHead{0};
+  std::atomic<unsigned> m_nMIDISurfaceQueueTail{0};
+  MIDISurfaceCommand m_ActiveMIDISurfaceCommand{SurfaceCommandNone, 0};
+  uint8_t m_nMIDISurfaceCommandStage = 0;
+  unsigned m_nMIDISurfaceCursorSteps = 0;
+  uint32_t m_nMIDISurfaceWaitStarted = 0;
+
+  bool m_bMIDISurfacePulseActive = false;
+  bool m_bMIDISurfacePulseReleased = false;
+  uint32_t m_nMIDISurfacePulseDeadline = 0;
+
+  unsigned m_nMIDIPotBank = 1;
+  int m_currentBankNumber = 0;
   
 
 

@@ -313,15 +313,55 @@ void CMiniJV880::Process(bool bPlugAndPlayUpdated) {
   if (!bPlugAndPlayUpdated)
     return;
 
-  if (m_pMIDIDevice == 0) {
-    m_pMIDIDevice =
-        (CUSBMIDIDevice *)CDeviceNameService::Get()->GetDevice("umidi1", FALSE);
-    if (m_pMIDIDevice != 0) {
-      m_pMIDIDevice->RegisterPacketHandler(USBMIDIMessageHandler);
-      m_pMIDIDevice->RegisterRemovedHandler(DeviceRemovedHandler, this);
+  ScanUSBMIDIDevices();
+}
+
+void CMiniJV880::ScanUSBMIDIDevices()
+{
+  for (unsigned deviceIndex = 0; deviceIndex < MAX_USB_MIDI_DEVICES;
+       ++deviceIndex)
+  {
+    char deviceName[16];
+    snprintf(deviceName, sizeof(deviceName), "umidi%u", deviceIndex + 1);
+
+    CUSBMIDIDevice *pDevice = static_cast<CUSBMIDIDevice *>(
+        CDeviceNameService::Get()->GetDevice(deviceName, FALSE));
+    if (pDevice == 0)
+      continue;
+
+    bool alreadyRegistered = false;
+    for (unsigned slot = 0; slot < MAX_USB_MIDI_DEVICES; ++slot)
+    {
+      if (m_pMIDIDevices[slot] == pDevice)
+      {
+        alreadyRegistered = true;
+        break;
+      }
     }
+    if (alreadyRegistered)
+      continue;
+
+    unsigned freeSlot = MAX_USB_MIDI_DEVICES;
+    for (unsigned slot = 0; slot < MAX_USB_MIDI_DEVICES; ++slot)
+    {
+      if (m_pMIDIDevices[slot] == 0)
+      {
+        freeSlot = slot;
+        break;
+      }
+    }
+
+    if (freeSlot == MAX_USB_MIDI_DEVICES)
+    {
+      LOGERR("No free USB MIDI slot for %s", deviceName);
+      continue;
+    }
+
+    m_pMIDIDevices[freeSlot] = pDevice;
+    pDevice->RegisterPacketHandler(USBMIDIMessageHandler);
+    pDevice->RegisterRemovedHandler(DeviceRemovedHandler, this);
+    LOGNOTE("USB MIDI %s registered in slot %u", deviceName, freeSlot + 1);
   }
-    
 }
 
 void CMiniJV880::USBMIDIMessageHandler(unsigned nCable, u8 *pPacket,
@@ -1224,13 +1264,20 @@ void CMiniJV880::SaveNVRAMIncremental() {
 
 
 void CMiniJV880::DeviceRemovedHandler(CDevice *pDevice, void *pContext) {
-  LOGERR("CMiniJV880::DeviceRemovedHandler");
-
   CMiniJV880 *pThis = static_cast<CMiniJV880 *>(pContext);
   assert(pThis != 0);
 
-  if (pDevice == pThis->m_pMIDIDevice)
-    pThis->m_pMIDIDevice = 0;
+  for (unsigned slot = 0; slot < MAX_USB_MIDI_DEVICES; ++slot)
+  {
+    if (pDevice == pThis->m_pMIDIDevices[slot])
+    {
+      pThis->m_pMIDIDevices[slot] = 0;
+      LOGNOTE("USB MIDI device removed from slot %u", slot + 1);
+      return;
+    }
+  }
+
+  LOGERR("Removed USB MIDI device was not registered");
 }
 
 void CMiniJV880::Run(unsigned nCore) {

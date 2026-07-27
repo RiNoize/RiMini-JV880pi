@@ -68,6 +68,7 @@ public:
   static void USBMIDIMessageHandler(unsigned nCable, u8 *pPacket,
                                     unsigned nLength);
   static void DeviceRemovedHandler(CDevice *pDevice, void *pContext);
+  void ScanUSBMIDIDevices();
   
   MidiParser midiParser;
     CSerialDevice& GetSerial() { return m_Serial; }
@@ -146,7 +147,8 @@ private:
   CConfig *m_pConfig;
   FATFS *m_pFileSystem;
 
-  CUSBMIDIDevice *volatile m_pMIDIDevice = 0;
+  static constexpr unsigned MAX_USB_MIDI_DEVICES = 4;
+  CUSBMIDIDevice *volatile m_pMIDIDevices[MAX_USB_MIDI_DEVICES] = {};
   CSerialDevice m_Serial;
   uint8_t m_MIDIBuffer[256];
   uint8_t m_nBankMSB[16] = {0};

@@ -195,20 +195,6 @@ public:
 	unsigned GetMIDIEncoderCC (void) const;
 	unsigned GetMIDIEncoderUp (void) const;
 	unsigned GetMIDIEncoderDown (void) const;
-
-	// Novation Launch Control XL / generic 8-track control surface
-	bool GetMIDISurfaceEnabled (void) const;
-	unsigned GetMIDISurfaceCh (void) const;
-	unsigned GetMIDISurfaceDeviceID (void) const;
-	bool GetMIDISurfaceLEDFeedback (void) const;
-	unsigned GetMIDISurfaceTemplate (void) const;
-	unsigned GetMIDISurfaceFadersCCStart (void) const;
-	unsigned GetMIDISurfacePotRow1CCStart (void) const;
-	unsigned GetMIDISurfacePotRow2CCStart (void) const;
-	unsigned GetMIDISurfacePotRow3CCStart (void) const;
-	bool GetMIDISurfacePickupEnabled (void) const;
-	unsigned GetMIDISurfacePickupRange (void) const;
-	unsigned GetMIDISurfaceButton (unsigned nButton) const;
 	
 	// Timeouts for button events in milliseconds
 	unsigned GetDoubleClickTimeout (void) const;
@@ -363,20 +349,6 @@ private:
 	unsigned m_nMIDIEncoderCC;
 	unsigned m_nMIDIEncoderUp;
 	unsigned m_nMIDIEncoderDown;
-
-	bool m_bMIDISurfaceEnabled;
-	unsigned m_nMIDISurfaceCh;
-	unsigned m_nMIDISurfaceDeviceID;
-	bool m_bMIDISurfaceLEDFeedback;
-	unsigned m_nMIDISurfaceTemplate;
-	unsigned m_nMIDISurfaceFadersCCStart;
-	unsigned m_nMIDISurfacePotRow1CCStart;
-	unsigned m_nMIDISurfacePotRow2CCStart;
-	unsigned m_nMIDISurfacePotRow3CCStart;
-	bool m_bMIDISurfacePickupEnabled;
-	unsigned m_nMIDISurfacePickupRange;
-	unsigned m_nMIDISurfaceButtons[16];
-
 	unsigned m_nDoubleClickTimeout;
 	unsigned m_nLongPressTimeout;	
 

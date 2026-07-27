@@ -112,40 +112,6 @@ CMiniJV880::CMiniJV880(CConfig *pConfig, CInterruptSystem *pInterrupt,
       __atomic_store_n(&sample_write_idx, 0u, __ATOMIC_RELAXED);
       m_nPendingBankSwitch.store(0xFF, std::memory_order_release);
 
-      m_bMIDISurfaceEnabled = pConfig->GetMIDISurfaceEnabled();
-      m_nMIDISurfaceChannel = pConfig->GetMIDISurfaceCh();
-      m_nMIDISurfaceDeviceID = pConfig->GetMIDISurfaceDeviceID() & 0x7F;
-      m_bMIDISurfaceLEDFeedback = pConfig->GetMIDISurfaceLEDFeedback();
-      m_nMIDISurfaceTemplate = pConfig->GetMIDISurfaceTemplate() & 0x0F;
-      // Internal row order is top, middle, bottom, fader.
-      m_nMIDISurfaceCCStart[0] = pConfig->GetMIDISurfacePotRow1CCStart() & 0x7F;
-      m_nMIDISurfaceCCStart[1] = pConfig->GetMIDISurfacePotRow2CCStart() & 0x7F;
-      m_nMIDISurfaceCCStart[2] = pConfig->GetMIDISurfacePotRow3CCStart() & 0x7F;
-      m_nMIDISurfaceCCStart[3] = pConfig->GetMIDISurfaceFadersCCStart() & 0x7F;
-      m_bMIDISurfacePickupEnabled = pConfig->GetMIDISurfacePickupEnabled();
-      m_nMIDISurfacePickupRange = pConfig->GetMIDISurfacePickupRange();
-      for (unsigned i = 0; i < 16; ++i) {
-          m_nMIDISurfaceButtons[i] = pConfig->GetMIDISurfaceButton(i + 1) & 0x7F;
-          m_nMIDISurfaceLastLED[i] = 0xFF;
-      }
-      m_currentBankNumber = -1;
-      m_currentExpansionRomIndex = pConfig->GetExpRom() == 0
-          ? -1 : (int)pConfig->GetExpRom() + 6;
-      for (unsigned tone = 0; tone < 4; ++tone) {
-          m_SurfaceToneValidMask[tone].store(0, std::memory_order_relaxed);
-          for (unsigned parameter = 0; parameter < SurfaceToneParameterCount; ++parameter)
-              m_SurfaceToneValues[tone][parameter].store(0, std::memory_order_relaxed);
-      }
-      for (unsigned parameter = 0; parameter < SurfaceCommonParameterCount; ++parameter)
-          m_SurfaceCommonValues[parameter].store(0, std::memory_order_relaxed);
-      for (unsigned part = 0; part < 8; ++part) {
-          m_SurfacePartEnabled[part].store(0, std::memory_order_relaxed);
-          m_SurfacePartLevel[part].store(0, std::memory_order_relaxed);
-          m_SurfacePartPan[part].store(0, std::memory_order_relaxed);
-          m_SurfacePartFieldMask[part].store(0, std::memory_order_relaxed);
-      }
-      ResetMIDISurfacePickup();
-
   // select the sound device
   const char *pDeviceName = pConfig->GetSoundDevice();
   if (strcmp(pDeviceName, "i2s") == 0) {
@@ -300,9 +266,6 @@ void CMiniJV880::Process(bool bPlugAndPlayUpdated) {
     
     CScheduler* const pScheduler = CScheduler::Get();
 
-    ProcessMIDISurface();
-    pScheduler->Yield();
-
     m_UI.Process ();
     pScheduler->Yield();
     
@@ -342,8 +305,6 @@ void CMiniJV880::Process(bool bPlugAndPlayUpdated) {
     if (m_pMIDIDevice != 0) {
       m_pMIDIDevice->RegisterPacketHandler(USBMIDIMessageHandler);
       m_pMIDIDevice->RegisterRemovedHandler(DeviceRemovedHandler, this);
-      memset(m_nMIDISurfaceLastLED, 0xFF, sizeof m_nMIDISurfaceLastLED);
-      MarkMIDISurfaceLEDsDirty();
     }
   }
     
@@ -353,751 +314,6 @@ void CMiniJV880::USBMIDIMessageHandler(unsigned nCable, u8 *pPacket,
                                        unsigned nLength) {
   if (!pPacket || nLength == 0) return;
   s_pThis->midiParser.FeedUSBMIDIPacket(pPacket, nLength);
-}
-
-
-namespace
-{
-    static const uint8_t kPatchCommonBase[4] = {0x00, 0x08, 0x20, 0x00};
-    static const uint8_t kPatchToneBaseThird[4] = {0x28, 0x29, 0x2A, 0x2B};
-
-    static const uint8_t kToneParameterOffset[] = {
-        0x03, // Tone Switch
-        0x5C, // TVA Level
-        0x5E, // TVA Pan (stored as two nibbles)
-        0x71, // Reverb Send
-        0x72, // Chorus Send
-        0x69, // TVA ENV Time 1 (Attack)
-        0x6B, // TVA ENV Time 2 (Decay)
-        0x4B, // TVF Resonance
-        0x4A  // TVF Cutoff
-    };
-
-    static const uint8_t kCommonParameterOffset[] = {
-        0x18, // Patch Level
-        0x19, // Patch Pan
-        0x0E, // Reverb Level
-        0x12  // Chorus Level
-    };
-
-    static void IncrementRolandAddress(uint8_t address[4])
-    {
-        for (int index = 3; index >= 0; --index)
-        {
-            address[index] = (address[index] + 1) & 0x7F;
-            if (address[index] != 0) break;
-        }
-    }
-
-    static uint8_t RolandChecksum(const uint8_t *data, unsigned length)
-    {
-        unsigned sum = 0;
-        for (unsigned index = 0; index < length; ++index) sum += data[index] & 0x7F;
-        return (uint8_t)((128 - (sum & 0x7F)) & 0x7F);
-    }
-}
-
-bool CMiniJV880::IsPatchMode() const
-{
-    return (mcu.jv880_led_state & (1u << 5)) != 0;
-}
-
-unsigned CMiniJV880::GetMIDISurfaceBank() const
-{
-    return m_nMIDISurfaceBank.load(std::memory_order_acquire);
-}
-
-const char *CMiniJV880::GetMIDISurfaceRowLabel(unsigned row) const
-{
-    static const char *bank1[] = {"Vol", "Pan", "Rev", "Cho"};
-    static const char *bank2[] = {"Atk", "Dcy", "Res", "Cut"};
-    static const char *bank3[] = {"B3A", "B3B", "B3C", "B3D"};
-    static const char *bank4[] = {"B4A", "B4B", "B4C", "B4D"};
-    if (row >= 4) return "";
-    switch (GetMIDISurfaceBank()) {
-    case 2: return bank2[row];
-    case 3: return bank3[row];
-    case 4: return bank4[row];
-    default: return bank1[row];
-    }
-}
-
-void CMiniJV880::FormatMIDISurfaceToneValue(unsigned row, unsigned tone,
-                                             char *text, unsigned textSize) const
-{
-    if (text == nullptr || textSize == 0) return;
-    snprintf(text, textSize, "---");
-    if (row >= 4 || tone >= 4 || !IsPatchMode()) return;
-
-    SurfaceToneParameter parameter;
-    if (GetMIDISurfaceBank() == 1) {
-        static const SurfaceToneParameter map[] = {
-            SurfaceToneLevel, SurfaceTonePan, SurfaceToneReverb, SurfaceToneChorus
-        };
-        parameter = map[row];
-    } else if (GetMIDISurfaceBank() == 2) {
-        static const SurfaceToneParameter map[] = {
-            SurfaceToneAttack, SurfaceToneDecay, SurfaceToneResonance, SurfaceToneCutoff
-        };
-        parameter = map[row];
-    } else {
-        return;
-    }
-
-    const unsigned valid = m_SurfaceToneValidMask[tone].load(std::memory_order_acquire);
-    if ((valid & (1u << parameter)) == 0) return;
-    const unsigned value = m_SurfaceToneValues[tone][parameter].load(std::memory_order_acquire);
-    snprintf(text, textSize, "%3u", value > 127 ? 127 : value);
-}
-
-bool CMiniJV880::MIDISurfaceChannelMatches(uint8_t channel) const
-{
-    if (!m_bMIDISurfaceEnabled || m_nMIDISurfaceChannel == 0) return false;
-    if (m_nMIDISurfaceChannel == 17) return true;
-    return (m_nMIDISurfaceChannel - 1) == channel;
-}
-
-void CMiniJV880::ResetMIDISurfacePickup(bool toneControlsOnly)
-{
-    for (unsigned row = 0; row < 4; ++row) {
-        for (unsigned column = 0; column < 8; ++column) {
-            if (toneControlsOnly && column >= 4) continue;
-            SurfacePickupState &state = m_MIDISurfacePickup[row * 8 + column];
-            state.latched = !m_bMIDISurfacePickupEnabled;
-            state.hasPrevious = false;
-            state.previous = 0;
-        }
-    }
-}
-
-bool CMiniJV880::ApplyMIDISurfacePickup(unsigned control, unsigned target, uint8_t value)
-{
-    if (control >= 32) return false;
-    SurfacePickupState &state = m_MIDISurfacePickup[control];
-    if (!m_bMIDISurfacePickupEnabled || state.latched) return true;
-
-    const unsigned low = target > m_nMIDISurfacePickupRange
-        ? target - m_nMIDISurfacePickupRange : 0;
-    const unsigned high = std::min(127u, target + m_nMIDISurfacePickupRange);
-    bool crossed = value >= low && value <= high;
-    if (!crossed && state.hasPrevious) {
-        crossed = (state.previous < target && value > target)
-               || (state.previous > target && value < target);
-    }
-    state.previous = value;
-    state.hasPrevious = true;
-    if (crossed) state.latched = true;
-    return state.latched;
-}
-
-bool CMiniJV880::GetMIDISurfaceTarget(unsigned row, unsigned column,
-                                      unsigned &target) const
-{
-    if (row >= 4 || column >= 8) return false;
-
-    if (!IsPatchMode()) {
-        if (row > 1) return false;
-        const unsigned mask = m_SurfacePartFieldMask[column].load(std::memory_order_acquire);
-        const unsigned bit = row == 0 ? 2u : 4u;
-        if ((mask & bit) == 0) return false;
-        target = row == 0
-            ? m_SurfacePartLevel[column].load(std::memory_order_acquire)
-            : m_SurfacePartPan[column].load(std::memory_order_acquire);
-        return true;
-    }
-
-    if (column < 4) {
-        SurfaceToneParameter parameter;
-        if (GetMIDISurfaceBank() == 1) {
-            static const SurfaceToneParameter map[] = {
-                SurfaceToneLevel, SurfaceTonePan, SurfaceToneReverb, SurfaceToneChorus
-            };
-            parameter = map[row];
-        } else if (GetMIDISurfaceBank() == 2) {
-            static const SurfaceToneParameter map[] = {
-                SurfaceToneAttack, SurfaceToneDecay, SurfaceToneResonance, SurfaceToneCutoff
-            };
-            parameter = map[row];
-        } else return false;
-        const unsigned valid = m_SurfaceToneValidMask[column].load(std::memory_order_acquire);
-        if ((valid & (1u << parameter)) == 0) return false;
-        target = m_SurfaceToneValues[column][parameter].load(std::memory_order_acquire);
-        return true;
-    }
-
-    if (column == 4) {
-        static const SurfaceCommonParameter map[] = {
-            SurfaceCommonLevel, SurfaceCommonPan,
-            SurfaceCommonReverb, SurfaceCommonChorus
-        };
-        const SurfaceCommonParameter parameter = map[row];
-        const unsigned valid = m_SurfaceCommonValidMask.load(std::memory_order_acquire);
-        if ((valid & (1u << parameter)) == 0) return false;
-        target = m_SurfaceCommonValues[parameter].load(std::memory_order_acquire);
-        return true;
-    }
-
-    if (column == 5) {
-        static const SurfaceToneParameter map[] = {
-            SurfaceToneAttack, SurfaceToneDecay, SurfaceToneResonance, SurfaceToneCutoff
-        };
-        const SurfaceToneParameter parameter = map[row];
-        unsigned sum = 0, count = 0;
-        for (unsigned tone = 0; tone < 4; ++tone) {
-            const unsigned valid = m_SurfaceToneValidMask[tone].load(std::memory_order_acquire);
-            if ((valid & (1u << SurfaceToneSwitch)) == 0
-                || (valid & (1u << parameter)) == 0
-                || m_SurfaceToneValues[tone][SurfaceToneSwitch].load(std::memory_order_acquire) == 0)
-                continue;
-            sum += m_SurfaceToneValues[tone][parameter].load(std::memory_order_acquire);
-            ++count;
-        }
-        if (count == 0) return false;
-        target = (sum + count / 2) / count;
-        return true;
-    }
-    return false;
-}
-
-void CMiniJV880::SendRolandRQ1(const uint8_t address[4], const uint8_t size[4])
-{
-    if (!address || !size) return;
-    uint8_t message[15] = {0xF0, 0x41, (uint8_t)m_nMIDISurfaceDeviceID,
-                           0x46, 0x11, 0,0,0,0, 0,0,0,0, 0, 0xF7};
-    memcpy(&message[5], address, 4);
-    memcpy(&message[9], size, 4);
-    message[13] = RolandChecksum(&message[5], 8);
-    mcu.postMidiSC55(message, sizeof message);
-}
-
-void CMiniJV880::SendRolandDT1(const uint8_t address[4],
-                               const uint8_t *data, unsigned length)
-{
-    if (!address || !data || length == 0 || length > 240) return;
-    uint8_t message[256];
-    unsigned pos = 0;
-    message[pos++] = 0xF0;
-    message[pos++] = 0x41;
-    message[pos++] = (uint8_t)m_nMIDISurfaceDeviceID;
-    message[pos++] = 0x46;
-    message[pos++] = 0x12;
-    memcpy(&message[pos], address, 4); pos += 4;
-    memcpy(&message[pos], data, length); pos += length;
-    message[pos++] = RolandChecksum(&message[5], 4 + length);
-    message[pos++] = 0xF7;
-    mcu.postMidiSC55(message, pos);
-}
-
-void CMiniJV880::SetToneParameter(unsigned tone,
-                                  SurfaceToneParameter parameter, uint8_t value)
-{
-    if (tone >= 4 || parameter >= SurfaceToneParameterCount) return;
-    uint8_t address[4] = {0x00, 0x08, kPatchToneBaseThird[tone],
-                          kToneParameterOffset[parameter]};
-    value &= 0x7F;
-    if (parameter == SurfaceTonePan) {
-        const uint8_t pan[2] = {
-            (uint8_t)((value >> 4) & 0x0F), (uint8_t)(value & 0x0F)
-        };
-        SendRolandDT1(address, pan, 2);
-    } else {
-        SendRolandDT1(address, &value, 1);
-    }
-    m_SurfaceToneValues[tone][parameter].store(value, std::memory_order_release);
-    m_SurfaceToneValidMask[tone].fetch_or(1u << parameter, std::memory_order_acq_rel);
-    m_nSurfaceLastPoll = 0;
-    MarkMIDISurfaceLEDsDirty();
-}
-
-void CMiniJV880::SetCommonParameter(SurfaceCommonParameter parameter, uint8_t value)
-{
-    if (parameter >= SurfaceCommonParameterCount) return;
-    uint8_t address[4] = {0x00, 0x08, 0x20, kCommonParameterOffset[parameter]};
-    value &= 0x7F;
-    SendRolandDT1(address, &value, 1);
-    m_SurfaceCommonValues[parameter].store(value, std::memory_order_release);
-    m_SurfaceCommonValidMask.fetch_or(1u << parameter, std::memory_order_acq_rel);
-    m_nSurfaceLastPoll = 0;
-}
-
-void CMiniJV880::SetGlobalToneMacro(SurfaceToneParameter parameter, uint8_t value)
-{
-    bool sent = false;
-    for (unsigned tone = 0; tone < 4; ++tone) {
-        const unsigned valid = m_SurfaceToneValidMask[tone].load(std::memory_order_acquire);
-        if ((valid & (1u << SurfaceToneSwitch)) != 0
-            && m_SurfaceToneValues[tone][SurfaceToneSwitch].load(std::memory_order_acquire) != 0) {
-            SetToneParameter(tone, parameter, value);
-            sent = true;
-        }
-    }
-    if (!sent) {
-        for (unsigned tone = 0; tone < 4; ++tone)
-            SetToneParameter(tone, parameter, value);
-    }
-}
-
-void CMiniJV880::SetPerformanceParameter(unsigned part, unsigned offset, uint8_t value)
-{
-    if (part >= 8) return;
-    uint8_t address[4] = {0x00, 0x00, (uint8_t)(0x18 + part), (uint8_t)offset};
-    value &= 0x7F;
-    SendRolandDT1(address, &value, 1);
-    if (offset == 0x15) {
-        m_SurfacePartEnabled[part].store(value != 0, std::memory_order_release);
-        m_SurfacePartFieldMask[part].fetch_or(1u, std::memory_order_acq_rel);
-        MarkMIDISurfaceLEDsDirty();
-    } else if (offset == 0x19) {
-        m_SurfacePartLevel[part].store(value, std::memory_order_release);
-        m_SurfacePartFieldMask[part].fetch_or(2u, std::memory_order_acq_rel);
-    } else if (offset == 0x1A) {
-        m_SurfacePartPan[part].store(value, std::memory_order_release);
-        m_SurfacePartFieldMask[part].fetch_or(4u, std::memory_order_acq_rel);
-    }
-    m_nSurfaceLastPoll = 0;
-}
-
-bool CMiniJV880::HandleMIDISurfaceCC(uint8_t channel, uint8_t cc, uint8_t value)
-{
-    if (!MIDISurfaceChannelMatches(channel)) return false;
-    unsigned row = 4, column = 0;
-    for (unsigned candidate = 0; candidate < 4; ++candidate) {
-        const unsigned start = m_nMIDISurfaceCCStart[candidate];
-        if (cc >= start && cc < start + 8) {
-            row = candidate;
-            column = cc - start;
-            break;
-        }
-    }
-    if (row >= 4) return false;
-
-    unsigned target = 0;
-    if (!GetMIDISurfaceTarget(row, column, target)) {
-        // Dedicated surface CCs are consumed even while their cache is loading
-        // or when the selected bank/row is intentionally reserved.
-        return true;
-    }
-    if (!ApplyMIDISurfacePickup(row * 8 + column, target, value)) return true;
-
-    if (!IsPatchMode()) {
-        if (row == 0) SetPerformanceParameter(column, 0x19, value);
-        else if (row == 1) SetPerformanceParameter(column, 0x1A, value);
-        return true;
-    }
-
-    if (column < 4) {
-        if (GetMIDISurfaceBank() == 1) {
-            static const SurfaceToneParameter map[] = {
-                SurfaceToneLevel, SurfaceTonePan, SurfaceToneReverb, SurfaceToneChorus
-            };
-            SetToneParameter(column, map[row], value);
-        } else if (GetMIDISurfaceBank() == 2) {
-            static const SurfaceToneParameter map[] = {
-                SurfaceToneAttack, SurfaceToneDecay, SurfaceToneResonance, SurfaceToneCutoff
-            };
-            SetToneParameter(column, map[row], value);
-        }
-    } else if (column == 4) {
-        static const SurfaceCommonParameter map[] = {
-            SurfaceCommonLevel, SurfaceCommonPan,
-            SurfaceCommonReverb, SurfaceCommonChorus
-        };
-        SetCommonParameter(map[row], value);
-    } else if (column == 5) {
-        static const SurfaceToneParameter map[] = {
-            SurfaceToneAttack, SurfaceToneDecay, SurfaceToneResonance, SurfaceToneCutoff
-        };
-        SetGlobalToneMacro(map[row], value);
-    }
-    return true;
-}
-
-void CMiniJV880::SelectSurfaceTone(unsigned tone)
-{
-    if (tone >= 4 || !IsPatchMode()) return;
-    const unsigned steps = (tone + 4 - m_nMIDISurfaceSelectedTone) % 4;
-    for (unsigned step = 0; step < steps; ++step) {
-        m_UI.TriggerUIButtonEvent(CUIButton::BtnEventToneSelect);
-        CTimer::SimpleMsDelay(15);
-        m_UI.TriggerUIButtonEvent(CUIButton::BtnEventRelease);
-        CTimer::SimpleMsDelay(15);
-    }
-    m_nMIDISurfaceSelectedTone = tone;
-    MarkMIDISurfaceLEDsDirty();
-}
-
-void CMiniJV880::QueuePatchBank(int bankNumber)
-{
-    if (bankNumber < 0 || bankNumber > 99) return;
-    m_nPendingBankSwitch.store(bankNumber, std::memory_order_release);
-    m_nBankSwitchTimestamp.store(CTimer::GetClockTicks(), std::memory_order_release);
-}
-
-void CMiniJV880::SelectAdjacentExpansion(int direction)
-{
-    if (m_bankMappingsCount == 0) return;
-    int candidates[32];
-    unsigned count = 0;
-    for (unsigned index = 0; index < m_bankMappingsCount && count < 32; ++index) {
-        const int rom = m_bankMappings[index].romIndex;
-        bool found = false;
-        for (unsigned test = 0; test < count; ++test)
-            if (candidates[test] == rom) found = true;
-        if (!found) candidates[count++] = rom;
-    }
-    if (count == 0) return;
-    std::sort(candidates, candidates + count);
-
-    int nextRom;
-    unsigned current = 0;
-    while (current < count && candidates[current] != m_currentExpansionRomIndex) ++current;
-    if (current >= count)
-        nextRom = direction >= 0 ? candidates[0] : candidates[count - 1];
-    else
-        nextRom = candidates[direction >= 0
-            ? (current + 1) % count
-            : (current + count - 1) % count];
-
-    int targetBank = 100;
-    for (unsigned index = 0; index < m_bankMappingsCount; ++index)
-        if (m_bankMappings[index].romIndex == nextRom
-            && m_bankMappings[index].bankNumber < targetBank)
-            targetBank = m_bankMappings[index].bankNumber;
-    if (targetBank <= 99) QueuePatchBank(targetBank);
-}
-
-void CMiniJV880::SelectAdjacentBank(int direction)
-{
-    int candidates[100];
-    unsigned count = 0;
-    for (unsigned index = 0; index < m_bankMappingsCount && count < 100; ++index)
-        if (m_currentExpansionRomIndex < 0
-            || m_bankMappings[index].romIndex == m_currentExpansionRomIndex)
-            candidates[count++] = m_bankMappings[index].bankNumber;
-    if (count == 0) return;
-    std::sort(candidates, candidates + count);
-
-    int target;
-    unsigned current = 0;
-    while (current < count && candidates[current] != m_currentBankNumber) ++current;
-    if (current >= count)
-        target = direction >= 0 ? candidates[0] : candidates[count - 1];
-    else
-        target = candidates[direction >= 0
-            ? (current + 1) % count
-            : (current + count - 1) % count];
-    QueuePatchBank(target);
-}
-
-bool CMiniJV880::HandleMIDISurfaceButton(uint8_t channel, uint8_t number, bool pressed)
-{
-    if (!MIDISurfaceChannelMatches(channel)) return false;
-    int button = -1;
-    for (unsigned index = 0; index < 16; ++index)
-        if (m_nMIDISurfaceButtons[index] != 0
-            && number == m_nMIDISurfaceButtons[index]) {
-            button = (int)index;
-            break;
-        }
-    if (button < 0) return false;
-    if (!pressed) return true;
-
-    if (button < 8) {
-        if (IsPatchMode()) {
-            if (button < 4) {
-                const unsigned valid = m_SurfaceToneValidMask[button].load(std::memory_order_acquire);
-                if (valid & (1u << SurfaceToneSwitch)) {
-                    const uint8_t next = m_SurfaceToneValues[button][SurfaceToneSwitch]
-                        .load(std::memory_order_acquire) ? 0 : 1;
-                    SetToneParameter(button, SurfaceToneSwitch, next);
-                } else {
-                    m_nSurfaceLastPoll = 0;
-                }
-            } else {
-                SelectSurfaceTone(button - 4);
-            }
-        } else {
-            const unsigned valid = m_SurfacePartFieldMask[button].load(std::memory_order_acquire);
-            if (valid & 1u) {
-                const uint8_t next = m_SurfacePartEnabled[button]
-                    .load(std::memory_order_acquire) ? 0 : 1;
-                SetPerformanceParameter(button, 0x15, next);
-            } else {
-                m_nSurfaceLastPoll = 0;
-            }
-        }
-        return true;
-    }
-
-    if (button < 12) {
-        m_nMIDISurfaceBank.store((unsigned)(button - 7), std::memory_order_release);
-        ResetMIDISurfacePickup(true);
-        MarkMIDISurfaceLEDsDirty();
-        return true;
-    }
-
-    if (button == 12) SelectAdjacentExpansion(-1);
-    else if (button == 13) SelectAdjacentExpansion(+1);
-    else if (button == 14) SelectAdjacentBank(-1);
-    else if (button == 15) SelectAdjacentBank(+1);
-    return true;
-}
-
-void CMiniJV880::DrainEmulatedMIDIOut()
-{
-    uint8_t byte;
-    while (mcu.ReadUARTTX(&byte)) {
-        if (byte == 0xF0) {
-            m_bSurfaceTXInSysEx = true;
-            m_nSurfaceTXSysExLength = 0;
-        }
-        if (!m_bSurfaceTXInSysEx) continue;
-        if (m_nSurfaceTXSysExLength < sizeof m_SurfaceTXSysEx)
-            m_SurfaceTXSysEx[m_nSurfaceTXSysExLength++] = byte;
-        else {
-            m_bSurfaceTXInSysEx = false;
-            m_nSurfaceTXSysExLength = 0;
-            continue;
-        }
-        if (byte == 0xF7) {
-            ParseEmulatedSysEx(m_SurfaceTXSysEx, m_nSurfaceTXSysExLength);
-            m_bSurfaceTXInSysEx = false;
-            m_nSurfaceTXSysExLength = 0;
-        }
-    }
-}
-
-void CMiniJV880::ParseEmulatedSysEx(const uint8_t *message, unsigned length)
-{
-    if (!message || length < 12 || message[0] != 0xF0 || message[length - 1] != 0xF7)
-        return;
-    if (message[1] != 0x41 || message[3] != 0x46 || message[4] != 0x12) return;
-
-    const unsigned dataLength = length - 11;
-    const uint8_t *address = &message[5];
-    const uint8_t *data = &message[9];
-    unsigned sum = message[length - 2] & 0x7F;
-    for (unsigned index = 0; index < 4; ++index) sum += address[index] & 0x7F;
-    for (unsigned index = 0; index < dataLength; ++index) sum += data[index] & 0x7F;
-    if ((sum & 0x7F) != 0) return;
-    UpdateSurfaceCacheFromDT1(address, data, dataLength);
-}
-
-void CMiniJV880::UpdateSurfaceCacheFromDT1(const uint8_t startAddress[4],
-                                            const uint8_t *data, unsigned length)
-{
-    if (!startAddress || !data) return;
-    uint8_t address[4] = {
-        (uint8_t)(startAddress[0] & 0x7F), (uint8_t)(startAddress[1] & 0x7F),
-        (uint8_t)(startAddress[2] & 0x7F), (uint8_t)(startAddress[3] & 0x7F)
-    };
-    bool patchNameChanged = false;
-
-    for (unsigned index = 0; index < length; ++index, IncrementRolandAddress(address)) {
-        const uint8_t value = data[index] & 0x7F;
-        if (address[0] == 0x00 && address[1] == 0x08 && address[2] == 0x20) {
-            const unsigned offset = address[3];
-            if (offset < 12) {
-                if (m_bSurfacePatchNameValid && m_SurfacePatchName[offset] != value)
-                    patchNameChanged = true;
-                m_SurfacePatchName[offset] = value;
-                if (offset == 11) m_bSurfacePatchNameValid = true;
-            }
-            for (unsigned parameter = 0; parameter < SurfaceCommonParameterCount; ++parameter)
-                if (offset == kCommonParameterOffset[parameter]) {
-                    m_SurfaceCommonValues[parameter].store(value, std::memory_order_release);
-                    m_SurfaceCommonValidMask.fetch_or(1u << parameter, std::memory_order_acq_rel);
-                }
-        }
-
-        if (address[0] == 0x00 && address[1] == 0x08
-            && address[2] >= 0x28 && address[2] <= 0x2B) {
-            const unsigned tone = address[2] - 0x28;
-            const unsigned offset = address[3];
-            if (offset == kToneParameterOffset[SurfaceTonePan]) {
-                unsigned pan = (value & 0x0F) << 4;
-                if (index + 1 < length) pan |= data[index + 1] & 0x0F;
-                if (pan > 127) pan = 127;
-                m_SurfaceToneValues[tone][SurfaceTonePan].store(pan, std::memory_order_release);
-                m_SurfaceToneValidMask[tone].fetch_or(1u << SurfaceTonePan, std::memory_order_acq_rel);
-            }
-            for (unsigned parameter = 0; parameter < SurfaceToneParameterCount; ++parameter) {
-                if (parameter == SurfaceTonePan) continue;
-                if (offset == kToneParameterOffset[parameter]) {
-                    const unsigned old = m_SurfaceToneValues[tone][parameter]
-                        .load(std::memory_order_acquire);
-                    m_SurfaceToneValues[tone][parameter].store(value, std::memory_order_release);
-                    m_SurfaceToneValidMask[tone].fetch_or(1u << parameter, std::memory_order_acq_rel);
-                    if (parameter == SurfaceToneSwitch && old != value)
-                        MarkMIDISurfaceLEDsDirty();
-                }
-            }
-        }
-
-        if (address[0] == 0x00 && address[1] == 0x00
-            && address[2] >= 0x18 && address[2] <= 0x1F) {
-            const unsigned part = address[2] - 0x18;
-            if (address[3] == 0x15) {
-                const unsigned old = m_SurfacePartEnabled[part].load(std::memory_order_acquire);
-                m_SurfacePartEnabled[part].store(value != 0, std::memory_order_release);
-                m_SurfacePartFieldMask[part].fetch_or(1u, std::memory_order_acq_rel);
-                if (old != (value != 0)) MarkMIDISurfaceLEDsDirty();
-            } else if (address[3] == 0x19) {
-                m_SurfacePartLevel[part].store(value, std::memory_order_release);
-                m_SurfacePartFieldMask[part].fetch_or(2u, std::memory_order_acq_rel);
-            } else if (address[3] == 0x1A) {
-                m_SurfacePartPan[part].store(value, std::memory_order_release);
-                m_SurfacePartFieldMask[part].fetch_or(4u, std::memory_order_acq_rel);
-            }
-        }
-    }
-
-    if (patchNameChanged) {
-        ResetMIDISurfacePickup();
-        MarkMIDISurfaceLEDsDirty();
-        m_nSurfacePollPhase = 1;
-        m_nSurfaceLastPoll = 0;
-    }
-}
-
-void CMiniJV880::PollMIDISurface()
-{
-    if (!m_bMIDISurfaceEnabled) return;
-    const unsigned now = CTimer::GetClockTicks();
-    if (m_nSurfaceLastPoll != 0 && now - m_nSurfaceLastPoll < 100000) return;
-    m_nSurfaceLastPoll = now;
-
-    if (IsPatchMode()) {
-        const unsigned phase = m_nSurfacePollPhase++ % 5;
-        if (phase == 0) {
-            const uint8_t size[4] = {0x00, 0x00, 0x00, 0x1A};
-            SendRolandRQ1(kPatchCommonBase, size);
-        } else {
-            const uint8_t address[4] = {
-                0x00, 0x08, kPatchToneBaseThird[phase - 1], 0x03
-            };
-            const uint8_t size[4] = {0x00, 0x00, 0x00, 0x70};
-            SendRolandRQ1(address, size);
-        }
-    } else {
-        const unsigned part = m_nSurfacePollPhase++ % 8;
-        const uint8_t address[4] = {0x00, 0x00, (uint8_t)(0x18 + part), 0x15};
-        const uint8_t size[4] = {0x00, 0x00, 0x00, 0x06};
-        SendRolandRQ1(address, size);
-    }
-}
-
-void CMiniJV880::InvalidateMIDISurfaceState()
-{
-    m_SurfaceCommonValidMask.store(0, std::memory_order_release);
-    for (unsigned tone = 0; tone < 4; ++tone)
-        m_SurfaceToneValidMask[tone].store(0, std::memory_order_release);
-    for (unsigned part = 0; part < 8; ++part)
-        m_SurfacePartFieldMask[part].store(0, std::memory_order_release);
-    m_bSurfacePatchNameValid = false;
-    ResetMIDISurfacePickup();
-    m_nSurfacePollPhase = 0;
-    m_nSurfaceLastPoll = 0;
-    MarkMIDISurfaceLEDsDirty();
-}
-
-void CMiniJV880::MarkMIDISurfaceLEDsDirty()
-{
-    m_bMIDISurfaceLEDDirty = true;
-}
-
-bool CMiniJV880::SendLaunchControlLED(unsigned button, uint8_t colour)
-{
-    if (button >= 16 || !m_pMIDIDevice) return false;
-    const uint8_t index = button < 8
-        ? (uint8_t)(0x18 + button)
-        : (uint8_t)(0x20 + button - 8);
-    const uint8_t message[] = {
-        0xF0, 0x00, 0x20, 0x29, 0x02, 0x11, 0x78,
-        (uint8_t)m_nMIDISurfaceTemplate, index, colour, 0xF7
-    };
-    CUSBMIDIDevice *device = m_pMIDIDevice;
-    return device != nullptr
-        && device->SendPlainMIDI(0, message, sizeof message, 0);
-}
-
-void CMiniJV880::UpdateMIDISurfaceLEDs()
-{
-    if (!m_bMIDISurfaceEnabled || !m_bMIDISurfaceLEDFeedback || !m_pMIDIDevice)
-        return;
-    const unsigned now = CTimer::GetClockTicks();
-    if (!m_bMIDISurfaceLEDDirty
-        && m_nMIDISurfaceLastLEDUpdate != 0
-        && now - m_nMIDISurfaceLastLEDUpdate < 1000000)
-        return;
-    if (m_nMIDISurfaceLastLEDUpdate != 0
-        && now - m_nMIDISurfaceLastLEDUpdate < 20000)
-        return;
-
-    static const uint8_t OFF = 0x0C;
-    static const uint8_t GREEN = 0x3C;
-    static const uint8_t AMBER = 0x3F;
-    uint8_t desired[16];
-    memset(desired, OFF, sizeof desired);
-
-    if (IsPatchMode()) {
-        for (unsigned tone = 0; tone < 4; ++tone) {
-            const unsigned valid = m_SurfaceToneValidMask[tone].load(std::memory_order_acquire);
-            if ((valid & (1u << SurfaceToneSwitch)) != 0
-                && m_SurfaceToneValues[tone][SurfaceToneSwitch]
-                    .load(std::memory_order_acquire) != 0)
-                desired[tone] = GREEN;
-        }
-        desired[4 + (m_nMIDISurfaceSelectedTone & 3u)] = AMBER;
-    } else {
-        for (unsigned part = 0; part < 8; ++part) {
-            const unsigned valid = m_SurfacePartFieldMask[part].load(std::memory_order_acquire);
-            if ((valid & 1u) != 0
-                && m_SurfacePartEnabled[part].load(std::memory_order_acquire) != 0)
-                desired[part] = GREEN;
-        }
-    }
-
-    const unsigned bank = GetMIDISurfaceBank();
-    if (bank >= 1 && bank <= 4) desired[7 + bank] = AMBER;
-
-    bool allSent = true;
-    for (unsigned button = 0; button < 16; ++button) {
-        if (m_nMIDISurfaceLastLED[button] == desired[button]) continue;
-        if (SendLaunchControlLED(button, desired[button]))
-            m_nMIDISurfaceLastLED[button] = desired[button];
-        else
-            allSent = false;
-    }
-    m_nMIDISurfaceLastLEDUpdate = now;
-    m_bMIDISurfaceLEDDirty = !allSent;
-}
-
-void CMiniJV880::ProcessMIDISurface()
-{
-    if (!m_bMIDISurfaceEnabled) return;
-    DrainEmulatedMIDIOut();
-
-    const bool patchMode = IsPatchMode();
-    if (patchMode != m_bMIDISurfaceLastPatchMode) {
-        m_bMIDISurfaceLastPatchMode = patchMode;
-        InvalidateMIDISurfaceState();
-    }
-
-    if (patchMode) {
-        const unsigned toneLEDs = (mcu.jv880_led_state >> 6) & 0x0F;
-        for (unsigned tone = 0; tone < 4; ++tone)
-            if (toneLEDs & (1u << tone)) {
-                if (m_nMIDISurfaceSelectedTone != tone) {
-                    m_nMIDISurfaceSelectedTone = tone;
-                    MarkMIDISurfaceLEDsDirty();
-                }
-                break;
-            }
-    }
-
-    PollMIDISurface();
-    UpdateMIDISurfaceLEDs();
 }
 
 void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
@@ -1122,19 +338,7 @@ void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
         return (m_UI.m_nMIDIButtonChannel - 1) == channel;
     };
 
-    // ===== Priority 1: surface buttons by MIDI Note On/Off =====
-    // The surface has its own channel and therefore is checked independently
-    // from the legacy front-panel MIDIButtonCh mapping.
-    if (m_UI.m_bMIDIButtonsUseNotes
-        && ((status & 0xF0) == 0x80 || (status & 0xF0) == 0x90)
-        && nLength == 3)
-    {
-        const uint8_t note = pData[1] & 0x7F;
-        const bool pressed = (status & 0xF0) == 0x90 && pData[2] != 0;
-        if (HandleMIDISurfaceButton(status & 0x0F, note, pressed)) return;
-    }
-
-    // ===== Priority 2: front-panel buttons by MIDI Note On/Off =====
+    // ===== Priority 1: UI buttons by MIDI Note On/Off =====
     // Note On with velocity > 0 presses the virtual button.
     // Note Off, or Note On with velocity 0, releases it.
     if (m_UI.m_bMIDIButtonsUseNotes
@@ -1185,7 +389,7 @@ void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
         }
     }
 
-    // ===== Priority 3: Musical Note On/Off =====
+    // ===== Priority 2: Musical Note On/Off =====
     if ((status & 0xF0) == 0x80 || (status & 0xF0) == 0x90) {
         if (nLength == 3) {
             mcu.postMidiSC55(pData, nLength);
@@ -1193,7 +397,7 @@ void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
         }
     }
 
-    // ===== Priority 4: Pitch Bend =====
+    // ===== Priority 3: Pitch Bend =====
     if ((status & 0xF0) == 0xE0) {
         if (nLength == 3) {
             mcu.postMidiSC55(pData, nLength);
@@ -1201,19 +405,13 @@ void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
         }
     }
 
-    // ===== Priority 5: dedicated control surface CC rows =====
-    // It must precede normal Bank Select because the middle row starts at CC32.
-    if ((status & 0xF0) == 0xB0 && nLength == 3
-        && HandleMIDISurfaceCC(status & 0x0F, pData[1] & 0x7F, pData[2] & 0x7F))
-        return;
-
-    // ===== Priority 6: Modulation (CC 1) =====
+    // ===== Priority 4: Modulation (CC 1) =====
     if ((status & 0xF0) == 0xB0 && nLength == 3 && pData[1] == 1) {
         mcu.postMidiSC55(pData, nLength);
         return;
     }
 
-    // ===== Priority 7: Bank Switch (CC 0 MSB and CC 32 LSB) =====
+    // ===== Priority 5: Bank Switch (CC 0 MSB and CC 32 LSB) =====
     if ((status & 0xF0) == 0xB0 && nLength == 3) {
         uint8_t channel = status & 0x0F;
         
@@ -1248,19 +446,13 @@ void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
             }
             
             // MSB = 0, LSB = 0-79, 82-127 - switch patch bank
-            QueuePatchBank(lsb);
+            m_nPendingBankSwitch.store(lsb, std::memory_order_release);
+            m_nBankSwitchTimestamp.store(CTimer::GetClockTicks(), std::memory_order_release);
             return;
         }
     }
 
-    // ===== Priority 8: surface buttons in legacy CC mode =====
-    if (!m_UI.m_bMIDIButtonsUseNotes
-        && (status & 0xF0) == 0xB0 && nLength == 3
-        && HandleMIDISurfaceButton(status & 0x0F, pData[1] & 0x7F,
-                                   (pData[2] & 0x7F) < 64))
-        return;
-
-    // ===== Priority 9: UI Control Change messages =====
+    // ===== Priority 6: UI Control Change messages =====
     // In Notes mode only the relative MIDI encoder remains on CC.
     // In legacy CC mode the buttons, Up/Down and NVRAM command also use CC.
     if ((status & 0xF0) == 0xB0 && nLength == 3
@@ -1418,11 +610,8 @@ void CMiniJV880::DeviceRemovedHandler(CDevice *pDevice, void *pContext) {
   CMiniJV880 *pThis = static_cast<CMiniJV880 *>(pContext);
   assert(pThis != 0);
 
-  if (pDevice == pThis->m_pMIDIDevice) {
+  if (pDevice == pThis->m_pMIDIDevice)
     pThis->m_pMIDIDevice = 0;
-    memset(pThis->m_nMIDISurfaceLastLED, 0xFF, sizeof pThis->m_nMIDISurfaceLastLED);
-    pThis->MarkMIDISurfaceLEDsDirty();
-  }
 }
 
 void CMiniJV880::Run(unsigned nCore) {
@@ -1839,10 +1028,6 @@ void CMiniJV880::switchPatchBank(int bankNumber) {
     m_bAudioPaused.store(false, std::memory_order_release);
     CTimer::SimpleMsDelay(20);
     std::atomic_thread_fence(std::memory_order_seq_cst);
-
-    m_currentBankNumber = bankNumber;
-    m_currentExpansionRomIndex = romIndex;
-    InvalidateMIDISurfaceState();
     
     size_t freeAfter = CMemorySystem::Get()->GetHeapFreeSpace(HEAP_ANY);
     LOGNOTE("=== BANK SWITCHED TO: %d ROM index %d (%s), free mem=%.2f MB ===", bankNumber, 

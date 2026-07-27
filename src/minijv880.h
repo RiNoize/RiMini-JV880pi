@@ -88,6 +88,14 @@ public:
   void switchPatchBank(int bankNumber);
   void InitBankMappings();
   void ParseAndAddMapping(const char* filename);
+
+  // Launch Control XL state used by the extended display.
+  bool IsPatchMode() const;
+  unsigned GetMIDISurfaceBank() const;
+  const char *GetMIDISurfaceRowLabel(unsigned row) const;
+  void FormatMIDISurfaceToneValue(unsigned row, unsigned tone,
+                                  char *text, unsigned textSize) const;
+
   bool InitNetwork();
 	void UpdateNetwork();
 
@@ -114,7 +122,8 @@ private:
   BankMapping* m_bankMappings;
   unsigned m_bankMappingsCount;
   unsigned m_bankMappingsCapacity;
-  int m_currentExpansionRomIndex; 
+  int m_currentExpansionRomIndex;
+  int m_currentBankNumber;
 
   static constexpr size_t sz32K = 32 * 1024;
   static constexpr size_t sz128K = 128 * 1024;
@@ -133,6 +142,97 @@ private:
   uint8_t m_MIDIBuffer[256];
   uint8_t m_nBankMSB[16] = {0};
   
+  enum SurfaceToneParameter {
+    SurfaceToneSwitch = 0,
+    SurfaceToneLevel,
+    SurfaceTonePan,
+    SurfaceToneReverb,
+    SurfaceToneChorus,
+    SurfaceToneAttack,
+    SurfaceToneDecay,
+    SurfaceToneResonance,
+    SurfaceToneCutoff,
+    SurfaceToneParameterCount
+  };
+
+  enum SurfaceCommonParameter {
+    SurfaceCommonLevel = 0,
+    SurfaceCommonPan,
+    SurfaceCommonReverb,
+    SurfaceCommonChorus,
+    SurfaceCommonParameterCount
+  };
+
+  struct SurfacePickupState {
+    bool latched;
+    bool hasPrevious;
+    uint8_t previous;
+  };
+
+  void ProcessMIDISurface();
+  bool MIDISurfaceChannelMatches(uint8_t channel) const;
+  bool HandleMIDISurfaceCC(uint8_t channel, uint8_t cc, uint8_t value);
+  bool HandleMIDISurfaceButton(uint8_t channel, uint8_t number, bool pressed);
+  bool GetMIDISurfaceTarget(unsigned row, unsigned column, unsigned &target) const;
+  bool ApplyMIDISurfacePickup(unsigned control, unsigned target, uint8_t value);
+  void ResetMIDISurfacePickup(bool toneControlsOnly = false);
+
+  void SendRolandRQ1(const uint8_t address[4], const uint8_t size[4]);
+  void SendRolandDT1(const uint8_t address[4], const uint8_t *data, unsigned length);
+  void DrainEmulatedMIDIOut();
+  void ParseEmulatedSysEx(const uint8_t *message, unsigned length);
+  void UpdateSurfaceCacheFromDT1(const uint8_t startAddress[4],
+                                 const uint8_t *data, unsigned length);
+  void PollMIDISurface();
+  void InvalidateMIDISurfaceState();
+
+  void SetToneParameter(unsigned tone, SurfaceToneParameter parameter, uint8_t value);
+  void SetCommonParameter(SurfaceCommonParameter parameter, uint8_t value);
+  void SetGlobalToneMacro(SurfaceToneParameter parameter, uint8_t value);
+  void SetPerformanceParameter(unsigned part, unsigned offset, uint8_t value);
+  void SelectSurfaceTone(unsigned tone);
+  void QueuePatchBank(int bankNumber);
+  void SelectAdjacentExpansion(int direction);
+  void SelectAdjacentBank(int direction);
+
+  void MarkMIDISurfaceLEDsDirty();
+  void UpdateMIDISurfaceLEDs();
+  bool SendLaunchControlLED(unsigned button, uint8_t colour);
+
+  bool m_bMIDISurfaceEnabled = false;
+  unsigned m_nMIDISurfaceChannel = 0;
+  unsigned m_nMIDISurfaceDeviceID = 16;
+  bool m_bMIDISurfaceLEDFeedback = true;
+  unsigned m_nMIDISurfaceTemplate = 0;
+  unsigned m_nMIDISurfaceCCStart[4] = {24, 32, 40, 16};
+  unsigned m_nMIDISurfaceButtons[16] = {0};
+  bool m_bMIDISurfacePickupEnabled = true;
+  unsigned m_nMIDISurfacePickupRange = 2;
+  std::atomic<unsigned> m_nMIDISurfaceBank{1};
+  unsigned m_nMIDISurfaceSelectedTone = 0;
+  bool m_bMIDISurfaceLastPatchMode = false;
+  SurfacePickupState m_MIDISurfacePickup[32];
+
+  std::atomic<unsigned> m_SurfaceToneValues[4][SurfaceToneParameterCount];
+  std::atomic<unsigned> m_SurfaceToneValidMask[4];
+  std::atomic<unsigned> m_SurfaceCommonValues[SurfaceCommonParameterCount];
+  std::atomic<unsigned> m_SurfaceCommonValidMask{0};
+  std::atomic<unsigned> m_SurfacePartEnabled[8];
+  std::atomic<unsigned> m_SurfacePartLevel[8];
+  std::atomic<unsigned> m_SurfacePartPan[8];
+  std::atomic<unsigned> m_SurfacePartFieldMask[8];
+
+  uint8_t m_SurfacePatchName[12] = {0};
+  bool m_bSurfacePatchNameValid = false;
+  uint8_t m_SurfaceTXSysEx[512] = {0};
+  unsigned m_nSurfaceTXSysExLength = 0;
+  bool m_bSurfaceTXInSysEx = false;
+  unsigned m_nSurfacePollPhase = 0;
+  unsigned m_nSurfaceLastPoll = 0;
+  bool m_bMIDISurfaceLEDDirty = true;
+  uint8_t m_nMIDISurfaceLastLED[16];
+  unsigned m_nMIDISurfaceLastLEDUpdate = 0;
+
   int lastEncoderPos = 0;
 
   CSoundBaseDevice *m_pSoundDevice;

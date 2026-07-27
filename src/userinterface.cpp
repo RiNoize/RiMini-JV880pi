@@ -733,21 +733,22 @@ void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 	if (!m_pConfig->GetDisplayInterfaceExtended ())
 		return;
 
-	// IE only adds information in rows 4..7. Rows 0..3 above remain the
-	// unmodified original interface in Patch, Performance, Edit and System.
-	// The original IO already supplies the Ptch/Ton1..Ton4 heading when the
-	// current mode requires it, so IE uses all four lower rows for parameters.
-	PutVirtualText (frame[4], 0, "Vol");
-	PutVirtualText (frame[5], 0, "Pan");
-	PutVirtualText (frame[6], 0, "Rev");
-	PutVirtualText (frame[7], 0, "Cho");
-
-	for (unsigned column = 5; column <= 20; column += 5)
+	// IE rows 4..7 follow the selected potentiometer bank and show the
+	// temporary Patch values read back from the emulated JV-880.
+	for (unsigned row = 0; row < 4; ++row)
 	{
-		PutVirtualText (frame[4], column, "---");
-		PutVirtualText (frame[5], column, "---");
-		PutVirtualText (frame[6], column, "---");
-		PutVirtualText (frame[7], column, "---");
+		PutVirtualText (frame[4 + row], 0,
+			m_pMiniJV880->IsPatchMode ()
+				? m_pMiniJV880->GetMIDISurfaceRowLabel (row)
+				: (row == 0 ? "Vol" : row == 1 ? "Pan" : row == 2 ? "Rev" : "Cho"));
+
+		for (unsigned tone = 0; tone < 4; ++tone)
+		{
+			char value[8] = "---";
+			if (m_pMiniJV880->IsPatchMode ())
+				m_pMiniJV880->FormatMIDISurfaceToneValue (row, tone, value, sizeof value);
+			PutVirtualText (frame[4 + row], 5 + tone * 5, value);
+		}
 	}
 
 }

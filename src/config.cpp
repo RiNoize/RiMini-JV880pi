@@ -22,6 +22,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 #include "config.h"
+#include <stdio.h>
 
 CConfig::CConfig (FATFS *pFileSystem)
 :	m_Properties ("minijv880.ini", pFileSystem)
@@ -180,6 +181,33 @@ void CConfig::Load (void)
 	m_nMIDIEncoderCC = m_Properties.GetNumber("MIDIEncoderCC", 0);
 	m_nMIDIEncoderUp = m_Properties.GetNumber("MIDIEncoderUp", 1);
 	m_nMIDIEncoderDown = m_Properties.GetNumber("MIDIEncoderDown", 0);
+
+	// Dedicated Launch Control XL surface. Buttons follow MIDIButtonsMode,
+	// while this channel owns the four rows of controls and the 16 surface notes.
+	m_bMIDISurfaceEnabled = m_Properties.GetNumber ("MIDISurfaceEnabled", 0) != 0;
+	m_nMIDISurfaceCh = m_Properties.GetNumber ("MIDISurfaceCh", 15);
+	m_nMIDISurfaceDeviceID = m_Properties.GetNumber ("MIDISurfaceDeviceID", 16) & 0x7F;
+	m_bMIDISurfaceLEDFeedback =
+		m_Properties.GetNumber ("MIDISurfaceLEDFeedback", 1) != 0;
+	m_nMIDISurfaceTemplate = m_Properties.GetNumber ("MIDISurfaceTemplate", 0) & 0x0F;
+	m_nMIDISurfaceFadersCCStart =
+		m_Properties.GetNumber ("MIDISurfaceFadersCCStart", 16) & 0x7F;
+	m_nMIDISurfacePotRow1CCStart =
+		m_Properties.GetNumber ("MIDISurfacePotRow1CCStart", 24) & 0x7F;
+	m_nMIDISurfacePotRow2CCStart =
+		m_Properties.GetNumber ("MIDISurfacePotRow2CCStart", 32) & 0x7F;
+	m_nMIDISurfacePotRow3CCStart =
+		m_Properties.GetNumber ("MIDISurfacePotRow3CCStart", 40) & 0x7F;
+	m_bMIDISurfacePickupEnabled =
+		m_Properties.GetNumber ("MIDISurfacePickup", 1) != 0;
+	m_nMIDISurfacePickupRange = m_Properties.GetNumber ("MIDISurfacePickupRange", 2);
+	if (m_nMIDISurfacePickupRange > 16) m_nMIDISurfacePickupRange = 16;
+	for (unsigned nButton = 0; nButton < 16; ++nButton)
+	{
+		char key[32];
+		snprintf (key, sizeof key, "MIDISurfaceButton%u", nButton + 1);
+		m_nMIDISurfaceButtons[nButton] = m_Properties.GetNumber (key, 0) & 0x7F;
+	}
 
 	m_nDoubleClickTimeout = m_Properties.GetNumber ("DoubleClickTimeout", 400);
 	m_nLongPressTimeout = m_Properties.GetNumber ("LongPressTimeout", 600);
@@ -746,6 +774,67 @@ unsigned CConfig::GetMIDIEncoderUp (void) const
 unsigned CConfig::GetMIDIEncoderDown (void) const
 {
     return m_nMIDIEncoderDown;
+}
+
+bool CConfig::GetMIDISurfaceEnabled (void) const
+{
+	return m_bMIDISurfaceEnabled;
+}
+
+unsigned CConfig::GetMIDISurfaceCh (void) const
+{
+	return m_nMIDISurfaceCh;
+}
+
+unsigned CConfig::GetMIDISurfaceDeviceID (void) const
+{
+	return m_nMIDISurfaceDeviceID;
+}
+
+bool CConfig::GetMIDISurfaceLEDFeedback (void) const
+{
+	return m_bMIDISurfaceLEDFeedback;
+}
+
+unsigned CConfig::GetMIDISurfaceTemplate (void) const
+{
+	return m_nMIDISurfaceTemplate;
+}
+
+unsigned CConfig::GetMIDISurfaceFadersCCStart (void) const
+{
+	return m_nMIDISurfaceFadersCCStart;
+}
+
+unsigned CConfig::GetMIDISurfacePotRow1CCStart (void) const
+{
+	return m_nMIDISurfacePotRow1CCStart;
+}
+
+unsigned CConfig::GetMIDISurfacePotRow2CCStart (void) const
+{
+	return m_nMIDISurfacePotRow2CCStart;
+}
+
+unsigned CConfig::GetMIDISurfacePotRow3CCStart (void) const
+{
+	return m_nMIDISurfacePotRow3CCStart;
+}
+
+bool CConfig::GetMIDISurfacePickupEnabled (void) const
+{
+	return m_bMIDISurfacePickupEnabled;
+}
+
+unsigned CConfig::GetMIDISurfacePickupRange (void) const
+{
+	return m_nMIDISurfacePickupRange;
+}
+
+unsigned CConfig::GetMIDISurfaceButton (unsigned nButton) const
+{
+	if (nButton < 1 || nButton > 16) return 0;
+	return m_nMIDISurfaceButtons[nButton - 1];
 }
 
 bool CConfig::GetEncoderEnabled (void) const

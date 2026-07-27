@@ -257,7 +257,6 @@ static const int CARDRAM_SIZE = 0x8000; // JV880 only
 static const int EXP_SIZE = 0x800000;
 static const int ROMSM_SIZE = 0x1000;
 const uint32_t uart_buffer_size = 8192;
-const uint32_t uart_tx_capture_buffer_size = 8192;
 
 //static const int audio_buffer_size = 8192;
 //extern int16_t sample_buffer[audio_buffer_size];
@@ -301,12 +300,6 @@ struct MCU {
   uint8_t uart_rx_byte;
   uint64_t uart_rx_delay;
   uint64_t uart_tx_delay;
-
-  // MIDI bytes transmitted by the emulated JV-880. The host consumes this
-  // single-producer/single-consumer ring to read RQ1/DT1 replies.
-  uint32_t uart_tx_capture_write_ptr;
-  uint32_t uart_tx_capture_read_ptr;
-  uint8_t uart_tx_capture_buffer[uart_tx_capture_buffer_size];
 
   uint32_t operand_type;
   uint16_t operand_ea;
@@ -354,7 +347,6 @@ struct MCU {
                 const uint8_t *s_nvram, const uint8_t *s_waverom_exp);
   void updateSC55(const int nSamples);
   void postMidiSC55(const uint8_t *message, int length);
-  bool ReadUARTTX(uint8_t *data);
   void SC55_Reset();
   void MCU_PostUART(const uint8_t data);
   void MCU_EncoderTrigger(const int dir);

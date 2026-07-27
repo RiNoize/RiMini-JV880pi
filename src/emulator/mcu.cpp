@@ -479,17 +479,6 @@ void MCU::MCU_UpdateUART_TX() {
   if (mcu.cycles < uart_tx_delay)
     return;
 
-  // Publish the completed byte before marking the TX register empty.
-  const uint32_t write =
-      __atomic_load_n(&uart_tx_capture_write_ptr, __ATOMIC_RELAXED);
-  const uint32_t next = (write + 1) % uart_tx_capture_buffer_size;
-  const uint32_t read =
-      __atomic_load_n(&uart_tx_capture_read_ptr, __ATOMIC_ACQUIRE);
-  if (next != read) {
-    uart_tx_capture_buffer[write] = dev_register[DEV_TDR];
-    __atomic_store_n(&uart_tx_capture_write_ptr, next, __ATOMIC_RELEASE);
-  }
-
   dev_register[DEV_SSR] |= 0x80;
   MCU_Interrupt_SetRequest(INTERRUPT_SOURCE_UART_TX,
                            (dev_register[DEV_SCR] & 0x80) != 0);
@@ -874,9 +863,6 @@ void MCU::SC55_Reset() {
   uart_rx_byte = 0x00;
   uart_rx_delay = 0x00;
   uart_tx_delay = 0x00;
-  __atomic_store_n(&uart_tx_capture_write_ptr, 0u, __ATOMIC_RELAXED);
-  __atomic_store_n(&uart_tx_capture_read_ptr, 0u, __ATOMIC_RELAXED);
-  memset(uart_tx_capture_buffer, 0x00, uart_tx_capture_buffer_size);
   memset(dev_register, 0, sizeof(dev_register));
 
   MCU_Init();
@@ -892,20 +878,4 @@ void MCU::postMidiSC55(const uint8_t *message, const int length) {
   for (int i = 0; i < length; i++) {
     MCU_PostUART(message[i]);
   }
-}
-
-bool MCU::ReadUARTTX(uint8_t *data) {
-  if (data == nullptr) return false;
-
-  const uint32_t read =
-      __atomic_load_n(&uart_tx_capture_read_ptr, __ATOMIC_RELAXED);
-  const uint32_t write =
-      __atomic_load_n(&uart_tx_capture_write_ptr, __ATOMIC_ACQUIRE);
-  if (read == write) return false;
-
-  *data = uart_tx_capture_buffer[read];
-  __atomic_store_n(&uart_tx_capture_read_ptr,
-                   (read + 1) % uart_tx_capture_buffer_size,
-                   __ATOMIC_RELEASE);
-  return true;
 }

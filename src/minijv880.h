@@ -100,6 +100,8 @@ public:
   bool ProcessMIDISurfacePulse();
   void FinishMIDISurfaceCommand();
   int FindPerformancePartColumn(unsigned part) const;
+  bool LCDRowContains(unsigned row, const char *text) const;
+  void TrackPerformancePartValues(const uint8_t *data, uint8_t length);
   void SelectAdjacentExpansion(bool up);
   void SelectAdjacentBank(bool up);
   void QueuePatchBankSwitch(int bankNumber);
@@ -195,6 +197,7 @@ private:
   static constexpr uint32_t MIDI_SURFACE_PRESS_US = 30000;
   static constexpr uint32_t MIDI_SURFACE_RELEASE_US = 30000;
   static constexpr uint32_t MIDI_SURFACE_MODE_WAIT_US = 700000;
+  static constexpr uint32_t MIDI_SURFACE_ENCODER_WAIT_US = 250000;
   static constexpr unsigned MIDI_SURFACE_MAX_CURSOR_STEPS = 24;
 
   MIDISurfaceCommand m_MIDISurfaceQueue[MIDI_SURFACE_QUEUE_SIZE];
@@ -203,6 +206,7 @@ private:
   MIDISurfaceCommand m_ActiveMIDISurfaceCommand{SurfaceCommandNone, 0};
   uint8_t m_nMIDISurfaceCommandStage = 0;
   unsigned m_nMIDISurfaceCursorSteps = 0;
+  unsigned m_nMIDISurfaceEncoderAttempts = 0;
   uint32_t m_nMIDISurfaceWaitStarted = 0;
 
   bool m_bMIDISurfacePulseActive = false;

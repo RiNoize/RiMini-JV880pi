@@ -59,6 +59,7 @@ CUserInterface::CUserInterface (CMiniJV880 *pMiniJV880, CGPIOManager *pGPIOManag
 {
 	screen_buffer = (u8 *)malloc(512);
 	memset (m_lastHDMIPanel, 0, sizeof m_lastHDMIPanel);
+	ClearPerformancePartValues ();
 }
 
 CUserInterface::~CUserInterface (void)
@@ -561,6 +562,21 @@ void CUserInterface::LCDMessage(const char* fmt, ...)
 
 
 
+void CUserInterface::SetPerformancePartValue(unsigned parameter, unsigned part, uint8_t value)
+{
+	if (parameter >= 4 || part >= 8)
+		return;
+
+	m_nPerformancePartValues[parameter][part] = value & 0x7F;
+	m_bPerformancePartValueValid[parameter][part] = true;
+}
+
+void CUserInterface::ClearPerformancePartValues()
+{
+	memset (m_nPerformancePartValues, 0, sizeof m_nPerformancePartValues);
+	memset (m_bPerformancePartValueValid, 0, sizeof m_bPerformancePartValueValid);
+}
+
 
 namespace
 {
@@ -596,6 +612,80 @@ namespace
 			const char ch = text[index];
 			row[column + index] = ch >= 32 && ch <= 126 ? ch : ' ';
 		}
+	}
+
+	static bool IsPerformancePartSeparator (u8 ch)
+	{
+		return ch == 0x09 || ch == '|';
+	}
+
+	static bool FindPerformancePartSlots (const u8 *row, int columns[8])
+	{
+		if (!row || !columns)
+			return false;
+
+		// The JV-880 renders the Performance part selector as
+		// |1|2|3|4|5|6|7|8|. A muted part is shown as '*', but the
+		// separators and slot positions remain unchanged.
+		for (int firstSeparator = 0; firstSeparator + 16 < 40; ++firstSeparator)
+		{
+			bool valid = true;
+			for (int separator = 0; separator <= 8; ++separator)
+			{
+				if (!IsPerformancePartSeparator (row[firstSeparator + separator * 2]))
+				{
+					valid = false;
+					break;
+				}
+			}
+
+			if (!valid)
+				continue;
+
+			for (int part = 0; part < 8; ++part)
+			{
+				const int column = firstSeparator + 1 + part * 2;
+				const u8 ch = row[column];
+				if (ch != static_cast<u8> ('1' + part) && ch != '*' && ch != ' ')
+				{
+					valid = false;
+					break;
+				}
+				columns[part] = column;
+			}
+
+			if (valid)
+				return true;
+		}
+
+		return false;
+	}
+
+	static unsigned ScaleMIDITo99 (u8 value)
+	{
+		return (static_cast<unsigned> (value & 0x7F) * 99u + 63u) / 127u;
+	}
+
+	static void FormatPerformanceValue (char cell[4], unsigned parameter,
+								u8 value, bool valid)
+	{
+		if (!valid)
+		{
+			memcpy (cell, "---", 4);
+			return;
+		}
+
+		if (parameter == 1)
+		{
+			const int pan = static_cast<int> (value & 0x7F) - 64;
+			if (pan == 0)
+				memcpy (cell, "  C", 4);
+			else
+				snprintf (cell, 4, "%+3d", pan);
+			return;
+		}
+
+		snprintf (cell, 4, " %02u", ScaleMIDITo99 (value));
 	}
 
 	static void FillHDMIRect (CScreenDevice *pScreen, unsigned x, unsigned y,
@@ -687,9 +777,12 @@ void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 	}
 
 	const u16 ledState = emuActive ? m_pMiniJV880->mcu.jv880_led_state : 0;
+	const bool patchMode = (ledState & (1 << 5)) != 0;
+	const bool extendedPerformance = emuActive && !showService
+		&& m_pConfig->GetDisplayInterfaceExtended () && !patchMode;
 
-	// Rows 2 and 3 always preserve the original Mini-JV880pi four-row
-	// interface. This is the same information shown on a 2004 display.
+	// Rows 2 and 3 preserve the original four-row interface. In extended
+	// Performance mode row 3 is reused as the compact eight-Part header.
 	if (showService)
 	{
 		for (unsigned row = 0; row < 2; ++row)
@@ -711,9 +804,9 @@ void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 			"PPrf", "Mute", "Moni", "Info", "Entr"
 		};
 		const char *toneNames[] = { "Ton1", "Ton2", "Ton3", "Ton4" };
-		const bool patchMode = (ledState & (1 << 5)) != 0;
+		const unsigned ledCount = extendedPerformance ? 5 : 10;
 
-		for (unsigned index = 0; index < 10; ++index)
+		for (unsigned index = 0; index < ledCount; ++index)
 		{
 			const bool isOn = (ledState & (1 << index)) != 0;
 			const char *name = 0;
@@ -733,10 +826,43 @@ void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 	if (!m_pConfig->GetDisplayInterfaceExtended ())
 		return;
 
-	// IE only adds information in rows 4..7. Rows 0..3 above remain the
-	// unmodified original interface in Patch, Performance, Edit and System.
-	// The original IO already supplies the Ptch/Ton1..Ton4 heading when the
-	// current mode requires it, so IE uses all four lower rows for parameters.
+	if (extendedPerformance)
+	{
+		// A 25-column line fits one label plus eight fixed three-character
+		// cells. The header therefore uses exactly the requested compact form:
+		// "Pe 1  2  3  4  5  6  7  8".
+		PutVirtualText (frame[3], 0, "Pe");
+
+		int partColumns[8];
+		const u8 *lcdTopRow = m_pMiniJV880->mcu.lcd.LCD_Data;
+		const bool havePartSlots = FindPerformancePartSlots (lcdTopRow, partColumns);
+		for (unsigned part = 0; part < 8; ++part)
+		{
+			char marker = static_cast<char> ('1' + part);
+			if (havePartSlots
+				&& lcdTopRow[partColumns[part]] != static_cast<u8> ('1' + part))
+				marker = '*';
+			frame[3][3 + part * 3] = marker;
+		}
+
+		static const char rowLabels[4] = { 'V', 'P', 'R', 'C' };
+		for (unsigned parameter = 0; parameter < 4; ++parameter)
+		{
+			frame[4 + parameter][0] = rowLabels[parameter];
+			for (unsigned part = 0; part < 8; ++part)
+			{
+				char cell[4];
+				FormatPerformanceValue (cell, parameter,
+					m_nPerformancePartValues[parameter][part],
+					m_bPerformancePartValueValid[parameter][part]);
+				PutVirtualText (frame[4 + parameter], 1 + part * 3, cell);
+			}
+		}
+		return;
+	}
+
+	// Patch mode keeps the four-Tone extended table. The parameter values
+	// are populated by the dedicated pot-bank implementation in a later fix.
 	PutVirtualText (frame[4], 0, "Vol");
 	PutVirtualText (frame[5], 0, "Pan");
 	PutVirtualText (frame[6], 0, "Rev");
@@ -749,7 +875,6 @@ void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 		PutVirtualText (frame[6], column, "---");
 		PutVirtualText (frame[7], column, "---");
 	}
-
 }
 
 void CUserInterface::RenderHDMIDisplay(unsigned long currentTime,

@@ -58,6 +58,8 @@ public:
 	void RenderDisplay(void);
 	void BuildVirtualDisplayFrame(char frame[8][26], bool emuActive, bool showService);
 	void RenderHDMIDisplay(unsigned long currentTime, const char frame[8][26]);
+	void SetPerformancePartValue(unsigned parameter, unsigned part, uint8_t value);
+	void ClearPerformancePartValues();
 	CWriteBufferDevice* GetLCDBuffered() { return m_pLCDBuffered; }
 
 	static bool g_ServiceActive;
@@ -123,6 +125,8 @@ private:
 	unsigned long m_lastHDMIUpdate;
 	bool m_bHDMIFirstFrame;
 	char m_lastHDMIPanel[8][25];
+	uint8_t m_nPerformancePartValues[4][8];
+	bool m_bPerformancePartValueValid[4][8];
 	unsigned m_lastHDMIScale;
 	unsigned m_lastHDMIX;
 	unsigned m_lastHDMIY;

@@ -415,6 +415,7 @@ bool CMiniJV880::DequeueMIDISurfaceCommand()
                                   std::memory_order_release);
     m_nMIDISurfaceCommandStage = 0;
     m_nMIDISurfaceCursorSteps = 0;
+    m_nMIDISurfaceEncoderAttempts = 0;
     m_nMIDISurfaceWaitStarted = CTimer::GetClockTicks();
     return true;
 }
@@ -453,45 +454,73 @@ void CMiniJV880::FinishMIDISurfaceCommand()
     m_ActiveMIDISurfaceCommand.index = 0;
     m_nMIDISurfaceCommandStage = 0;
     m_nMIDISurfaceCursorSteps = 0;
+    m_nMIDISurfaceEncoderAttempts = 0;
+}
+
+bool CMiniJV880::LCDRowContains(unsigned row, const char *text) const
+{
+    if (row >= 2 || text == nullptr || *text == 0) return false;
+
+    const uint8_t *lcdRow = mcu.lcd.LCD_Data + row * 40;
+    const unsigned textLength = strlen(text);
+    if (textLength > 40) return false;
+
+    for (unsigned column = 0; column + textLength <= 40; ++column)
+    {
+        bool match = true;
+        for (unsigned index = 0; index < textLength; ++index)
+        {
+            uint8_t ch = lcdRow[column + index];
+            if (ch == 0x09) ch = '|';
+            if (ch != static_cast<uint8_t>(text[index]))
+            {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
+
+    return false;
 }
 
 int CMiniJV880::FindPerformancePartColumn(unsigned part) const
 {
     if (part < 1 || part > 8) return -1;
 
-    // Performance Play displays the part selector as an ordered 1..8
-    // sequence on the first LCD line. Locate that sequence rather than
-    // relying on one hard-coded display column.
     const uint8_t *row = mcu.lcd.LCD_Data;
-    for (int first = 0; first < 40; ++first)
-    {
-        if (row[first] != '1') continue;
+    auto isSeparator = [](uint8_t ch) {
+        return ch == 0x09 || ch == '|';
+    };
 
-        int columns[8] = { first, -1, -1, -1, -1, -1, -1, -1 };
-        int previous = first;
-        bool sequenceFound = true;
-        for (int digit = 2; digit <= 8; ++digit)
+    // Performance Play/Mute renders |1|2|3|4|5|6|7|8|. A muted
+    // part is represented by '*' (and may briefly blink as a space),
+    // while the separators and slot columns remain stable.
+    for (int firstSeparator = 0; firstSeparator + 16 < 40; ++firstSeparator)
+    {
+        bool valid = true;
+        for (int separator = 0; separator <= 8; ++separator)
         {
-            int found = -1;
-            const int limit = std::min(previous + 4, 39);
-            for (int col = previous + 1; col <= limit; ++col)
+            if (!isSeparator(row[firstSeparator + separator * 2]))
             {
-                if (row[col] == static_cast<uint8_t>('0' + digit))
-                {
-                    found = col;
-                    break;
-                }
-            }
-            if (found < 0)
-            {
-                sequenceFound = false;
+                valid = false;
                 break;
             }
-            columns[digit - 1] = found;
-            previous = found;
+        }
+        if (!valid) continue;
+
+        for (int slot = 0; slot < 8; ++slot)
+        {
+            const uint8_t ch = row[firstSeparator + 1 + slot * 2];
+            if (ch != static_cast<uint8_t>('1' + slot)
+                && ch != '*' && ch != ' ')
+            {
+                valid = false;
+                break;
+            }
         }
 
-        if (sequenceFound) return columns[part - 1];
+        if (valid) return firstSeparator + 1 + static_cast<int>(part - 1) * 2;
     }
 
     return -1;
@@ -540,6 +569,9 @@ void CMiniJV880::ProcessMIDISurfaceButtons()
             return;
         }
 
+        // Enter Patch Edit first. The JV-880 opens Patch:Common, so the
+        // command must then move the cursor to the upper selector and turn
+        // the DATA encoder to Patch:Tone before using Tone Select + Switch.
         if (m_nMIDISurfaceCommandStage == 0)
         {
             if (!editMode)
@@ -550,6 +582,7 @@ void CMiniJV880::ProcessMIDISurfaceButtons()
                 return;
             }
             m_nMIDISurfaceCommandStage = 2;
+            m_nMIDISurfaceWaitStarted = now;
         }
 
         if (m_nMIDISurfaceCommandStage == 1)
@@ -561,14 +594,88 @@ void CMiniJV880::ProcessMIDISurfaceButtons()
                 return;
             }
             m_nMIDISurfaceCommandStage = 2;
+            m_nMIDISurfaceWaitStarted = now;
+        }
+
+        if (m_nMIDISurfaceCommandStage == 3)
+        {
+            // Cursor pulse completed; inspect the new cursor position.
+            m_nMIDISurfaceCommandStage = 2;
+            m_nMIDISurfaceWaitStarted = now;
         }
 
         if (m_nMIDISurfaceCommandStage == 2)
         {
+            if (LCDRowContains(0, "Patch:Tone"))
+            {
+                m_nMIDISurfaceCommandStage = 6;
+            }
+            else
+            {
+                const int cursorRow = mcu.lcd.LCD_DD_RAM / 0x40;
+                if (cursorRow != 0)
+                {
+                    if (m_nMIDISurfaceCursorSteps >= MIDI_SURFACE_MAX_CURSOR_STEPS)
+                    {
+                        FinishMIDISurfaceCommand();
+                        return;
+                    }
+
+                    StartMIDISurfacePulse(1u << MCU_BUTTON_CURSOR_L);
+                    ++m_nMIDISurfaceCursorSteps;
+                    m_nMIDISurfaceCommandStage = 3;
+                    return;
+                }
+
+                if (!LCDRowContains(0, "Patch:Common"))
+                {
+                    if (now - m_nMIDISurfaceWaitStarted >= MIDI_SURFACE_MODE_WAIT_US)
+                        FinishMIDISurfaceCommand();
+                    return;
+                }
+
+                // Try the normal DATA direction first. If this firmware build
+                // maps the encoder direction oppositely, stage 4 retries once
+                // in the other direction.
+                mcu.MCU_EncoderTrigger(1);
+                m_nMIDISurfaceEncoderAttempts = 1;
+                m_nMIDISurfaceCommandStage = 4;
+                m_nMIDISurfaceWaitStarted = now;
+                return;
+            }
+        }
+
+        if (m_nMIDISurfaceCommandStage == 4)
+        {
+            if (LCDRowContains(0, "Patch:Tone"))
+            {
+                m_nMIDISurfaceCommandStage = 6;
+            }
+            else if (now - m_nMIDISurfaceWaitStarted >= MIDI_SURFACE_ENCODER_WAIT_US)
+            {
+                if (m_nMIDISurfaceEncoderAttempts == 1)
+                {
+                    mcu.MCU_EncoderTrigger(0);
+                    m_nMIDISurfaceEncoderAttempts = 2;
+                    m_nMIDISurfaceWaitStarted = now;
+                    return;
+                }
+
+                FinishMIDISurfaceCommand();
+                return;
+            }
+            else
+            {
+                return;
+            }
+        }
+
+        if (m_nMIDISurfaceCommandStage == 6)
+        {
             const uint32_t mask = (1u << MCU_BUTTON_TONE_SELECT)
                 | (1u << toneSwitchButtons[m_ActiveMIDISurfaceCommand.index]);
             StartMIDISurfacePulse(mask);
-            m_nMIDISurfaceCommandStage = 3;
+            m_nMIDISurfaceCommandStage = 7;
             return;
         }
 
@@ -753,6 +860,75 @@ void CMiniJV880::SelectAdjacentBank(bool up)
     m_UI.LCDMessage("Expansion %02d\nBank %02d", currentRom - 6, targetBank);
 }
 
+void CMiniJV880::TrackPerformancePartValues(const uint8_t *pData, uint8_t nLength)
+{
+    if (pData == nullptr || nLength == 0) return;
+
+    const bool patchMode = (mcu.jv880_led_state & (1u << 5)) != 0;
+    const uint8_t status = pData[0];
+
+    // Standard part controls. They are observed passively and still continue
+    // through the normal MIDI path to the emulated JV-880.
+    if (!patchMode && (status & 0xF0) == 0xB0 && nLength == 3)
+    {
+        const unsigned part = status & 0x0F;
+        if (part < 8)
+        {
+            const uint8_t controller = pData[1] & 0x7F;
+            const uint8_t value = pData[2] & 0x7F;
+            if (controller == 7)       m_UI.SetPerformancePartValue(0, part, value);
+            else if (controller == 10) m_UI.SetPerformancePartValue(1, part, value);
+            else if (controller == 91) m_UI.SetPerformancePartValue(2, part, value);
+            else if (controller == 93) m_UI.SetPerformancePartValue(3, part, value);
+        }
+        return;
+    }
+
+    if (!patchMode && (status & 0xF0) == 0xC0)
+    {
+        // A Program Change may load a different set of Part values. Do not
+        // retain values observed for the previous Performance indefinitely.
+        m_UI.ClearPerformancePartValues();
+        return;
+    }
+
+    // Observe incoming Roland JV-880 DT1 writes without querying or modifying
+    // the emulator. This allows the table to follow editors and the upcoming
+    // pot-bank implementation while keeping MIDI strictly input-only.
+    if (nLength < 11 || pData[0] != 0xF0 || pData[1] != 0x41
+        || pData[3] != 0x46 || pData[4] != 0x12)
+        return;
+
+    uint8_t address[4] = { pData[5], pData[6], pData[7], pData[8] };
+    const unsigned dataEnd = nLength >= 2 ? nLength - 2 : 0; // checksum + F7
+    for (unsigned dataIndex = 9; dataIndex < dataEnd; ++dataIndex)
+    {
+        const uint8_t value = pData[dataIndex] & 0x7F;
+
+        // Temporary Performance Part blocks: 00 00 18..1F xx.
+        if (address[0] == 0x00 && address[1] == 0x00
+            && address[2] >= 0x18 && address[2] <= 0x1F)
+        {
+            const unsigned part = address[2] - 0x18;
+            if (address[3] == 0x19)      m_UI.SetPerformancePartValue(0, part, value);
+            else if (address[3] == 0x1A) m_UI.SetPerformancePartValue(1, part, value);
+        }
+
+        // Temporary Patch Common blocks used by Performance Parts:
+        // 00 00..07 20 xx. Reverb and Chorus levels live in Common.
+        if (address[0] == 0x00 && address[1] <= 0x07 && address[2] == 0x20)
+        {
+            const unsigned part = address[1];
+            if (address[3] == 0x0E)      m_UI.SetPerformancePartValue(2, part, value);
+            else if (address[3] == 0x12) m_UI.SetPerformancePartValue(3, part, value);
+        }
+
+        // DT1 payloads used here are short and remain inside the final
+        // seven-bit address byte.
+        address[3] = (address[3] + 1) & 0x7F;
+    }
+}
+
 void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
 {
     if (nLength == 0) return;
@@ -768,6 +944,7 @@ void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
     }   
 
     uint8_t status = pData[0];
+    TrackPerformancePartValues(pData, nLength);
 
     auto MIDIButtonChannelMatches = [this](uint8_t channel) {
         if (m_UI.m_nMIDIButtonChannel == 0) return false;

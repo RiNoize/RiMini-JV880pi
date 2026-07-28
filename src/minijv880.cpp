@@ -1024,11 +1024,10 @@ void CMiniJV880::RefreshMIDIPotSnapshot()
         {
             const unsigned base = SRAM_TEMP_PERF_OFFSET + PERF_COMMON_SIZE
                 + part * PERF_PART_SIZE;
-            updateTarget(0, part, mcu.sram[base + 17], false);
-            updateTarget(1, part, mcu.sram[base + 18], false);
-            const uint8_t switches = mcu.sram[base + 21];
-            updateTarget(2, part, (switches & 0x40) ? 127 : 0, false);
-            updateTarget(3, part, (switches & 0x20) ? 127 : 0, false);
+            updateTarget(0, part, mcu.sram[base + 17], false); // Part Level
+            updateTarget(1, part, mcu.sram[base + 18], false); // Part Pan
+            updateTarget(2, part, mcu.sram[base + 19], false); // Coarse Tune (-48..+48)
+            updateTarget(3, part, mcu.sram[base + 20], false); // Fine Tune (-50..+50)
         }
         return;
     }
@@ -1092,8 +1091,10 @@ bool CMiniJV880::HandleMIDIPotCC(uint8_t channel, uint8_t ccNumber,
     }
     if (row >= 4 || index >= 8) return false;
 
-    // A mapped control is always consumed. This is especially important for
-    // CC 32, which otherwise enters the expansion Bank Select path.
+    // CC 32 remains the JV-880 Bank Select LSB. It is never consumed by the
+    // generic pot layer, even if it is accidentally assigned in the INI.
+    if (ccNumber == 32) return false;
+
     const bool patchMode = (mcu.jv880_led_state & (1u << 5)) != 0;
     if (patchMode && (index >= 4 || m_nMIDIPotBank < 1 || m_nMIDIPotBank > 2))
         return true;
@@ -1109,35 +1110,13 @@ bool CMiniJV880::HandleMIDIPotCC(uint8_t channel, uint8_t ccNumber,
     const uint8_t target = m_nMIDIPotTargets[row][index];
     const uint32_t now = CTimer::GetClockTicks();
 
-    if (!patchMode && row >= 2)
-    {
-        // In a JV-880 Performance, Reverb and Chorus are per-Part switches.
-        // The pot behaves as a threshold switch, but only after it has first
-        // reached the side that matches the loaded Performance state.
-        const bool physicalOn = value >= 64;
-        const bool currentOn = target >= 64;
-        m_nMIDIPotLastPhysical[row][index] = value;
-        m_bMIDIPotLastPhysicalValid[row][index] = true;
-
-        if (!m_bMIDIPotSwitchArmed[row][index])
-        {
-            if (physicalOn == currentOn)
-                m_bMIDIPotSwitchArmed[row][index] = true;
-            return true;
-        }
-
-        if (physicalOn == currentOn)
-            return true;
-
-        const uint8_t rawValue = physicalOn ? 127 : 0;
-        SendJV880DT1(0x00, 0x00, static_cast<uint8_t>(0x18 + index),
-                     row == 2 ? 0x1D : 0x1E, physicalOn ? 1 : 0);
-        m_nMIDIPotTargets[row][index] = rawValue;
-        m_bMIDIPotTargetValid[row][index] = true;
-        m_nMIDIPotWriteTick[row][index] = now;
-        m_UI.SetPerformancePartValue(row, index, rawValue);
-        return true;
-    }
+    // Coarse and Fine Tune have narrower raw ranges than a MIDI controller.
+    // Map the full 0..127 travel before pickup so the end stops reach the
+    // complete JV-880 ranges: Coarse 16..112 (-48..+48), Fine 14..114 (-50..+50).
+    if (!patchMode && row == 2)
+        value = static_cast<uint8_t>(16u + (static_cast<unsigned>(value) * 96u + 63u) / 127u);
+    else if (!patchMode && row == 3)
+        value = static_cast<uint8_t>(14u + (static_cast<unsigned>(value) * 100u + 63u) / 127u);
 
     bool pickupReached = m_bMIDIPotPickedUp[row][index];
     if (!pickupReached)
@@ -1175,8 +1154,25 @@ bool CMiniJV880::HandleMIDIPotCC(uint8_t channel, uint8_t ccNumber,
     {
         static const uint8_t bank1Parameters[4] = { 0x5C, 0x5E, 0x71, 0x72 };
         static const uint8_t bank2Parameters[4] = { 0x69, 0x6B, 0x4B, 0x4A };
+        static const unsigned bank1Offsets[4] = { 67, 68, 82, 83 };
+        static const unsigned bank2Offsets[4] = { 74, 76, 53, 52 };
         const uint8_t parameter = m_nMIDIPotBank == 1
             ? bank1Parameters[row] : bank2Parameters[row];
+        const unsigned nvramOffset = m_nMIDIPotBank == 1
+            ? bank1Offsets[row] : bank2Offsets[row];
+        const unsigned nvramBase = NVRAM_WORKING_PATCH_OFFSET + PATCH_COMMON_SIZE
+            + index * PATCH_TONE_SIZE;
+
+        // Keep the local Working Patch synchronized with the DT1 write. The
+        // display snapshot reads this memory, so the edited value remains
+        // stable instead of reverting on the next refresh.
+        if (m_nMIDIPotBank == 2 && row == 2)
+            mcu.nvram[nvramBase + nvramOffset] =
+                static_cast<uint8_t>((mcu.nvram[nvramBase + nvramOffset] & 0x80)
+                                     | (value & 0x7F));
+        else
+            mcu.nvram[nvramBase + nvramOffset] = value & 0x7F;
+
         if (m_nMIDIPotBank == 1 && row == 1)
             SendJV880DT1NibblePair(0x00, 0x08,
                 static_cast<uint8_t>(0x28 + index), parameter, value);
@@ -1188,8 +1184,11 @@ bool CMiniJV880::HandleMIDIPotCC(uint8_t channel, uint8_t ccNumber,
     }
     else
     {
+        const unsigned sramBase = SRAM_TEMP_PERF_OFFSET + PERF_COMMON_SIZE
+            + index * PERF_PART_SIZE;
+        mcu.sram[sramBase + 17 + row] = value & 0x7F;
         SendJV880DT1(0x00, 0x00, static_cast<uint8_t>(0x18 + index),
-                     row == 0 ? 0x19 : 0x1A, value);
+                     static_cast<uint8_t>(0x19 + row), value);
         m_UI.SetPerformancePartValue(row, index, value);
     }
 
@@ -1238,10 +1237,8 @@ void CMiniJV880::TrackPerformancePartValues(const uint8_t *pData, uint8_t nLengt
             && address[2] >= 0x18 && address[2] <= 0x1F)
         {
             const unsigned part = address[2] - 0x18;
-            if (address[3] == 0x19)      m_UI.SetPerformancePartValue(0, part, value);
-            else if (address[3] == 0x1A) m_UI.SetPerformancePartValue(1, part, value);
-            else if (address[3] == 0x1D) m_UI.SetPerformancePartValue(2, part, value ? 127 : 0);
-            else if (address[3] == 0x1E) m_UI.SetPerformancePartValue(3, part, value ? 127 : 0);
+            if (address[3] >= 0x19 && address[3] <= 0x1C)
+                m_UI.SetPerformancePartValue(address[3] - 0x19, part, value);
         }
         address[3] = (address[3] + 1) & 0x7F;
     }
@@ -1324,7 +1321,7 @@ void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
     }
 
     // ===== Priority 2: Generic pots/faders with pickup =====
-    // Run before Bank Select because a configured physical control may use CC 32.
+    // CC 32 is explicitly reserved inside HandleMIDIPotCC for Bank Select LSB.
     if ((status & 0xF0) == 0xB0 && nLength == 3
         && HandleMIDIPotCC(status & 0x0F, pData[1] & 0x7F, pData[2] & 0x7F))
     {

@@ -197,7 +197,14 @@ void CConfig::Load (void)
 	m_bMIDIPotsEnabled = m_Properties.GetNumber("MIDIPotsEnabled", 0) != 0;
 	m_nMIDIPotCh = m_Properties.GetNumber("MIDIPotCh", 0);
 	static const char *potRowNames[4] = { "Upper", "Middle", "Lower", "Fader" };
-	static const unsigned potRowDefaultCC[4] = { 24, 32, 40, 16 };
+	// CC 32 is reserved for Bank Select LSB. The first Middle control uses
+	// CC 48 by default; the remaining controls keep CC 33..39.
+	static const unsigned potRowDefaultCC[4][8] = {
+		{ 24, 25, 26, 27, 28, 29, 30, 31 },
+		{ 48, 33, 34, 35, 36, 37, 38, 39 },
+		{ 40, 41, 42, 43, 44, 45, 46, 47 },
+		{ 16, 17, 18, 19, 20, 21, 22, 23 }
+	};
 	for (unsigned row = 0; row < 4; ++row)
 	{
 		for (unsigned index = 0; index < 8; ++index)
@@ -207,7 +214,7 @@ void CConfig::Load (void)
 				 "MIDIPot%s%u", potRowNames[row], index + 1);
 			m_nMIDIPotControls[row][index] =
 				m_Properties.GetNumber(propertyName,
-					potRowDefaultCC[row] + index) & 0x7F;
+					potRowDefaultCC[row][index]) & 0x7F;
 		}
 	}
 

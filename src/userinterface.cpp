@@ -721,6 +721,47 @@ namespace
 		snprintf (cell, 3, "%02u", ScaleMIDITo99 (value));
 	}
 
+	static void FormatSignedTuneValue (char cell[4], u8 value, bool valid)
+	{
+		if (!valid)
+		{
+			memcpy (cell, " --", 4);
+			return;
+		}
+
+		int signedValue = static_cast<int> (value & 0x7F) - 64;
+		if (signedValue < -99) signedValue = -99;
+		if (signedValue > 99) signedValue = 99;
+		if (signedValue == 0)
+			snprintf (cell, 4, " 00");
+		else
+			snprintf (cell, 4, "%c%02u", signedValue < 0 ? '-' : '+',
+				 static_cast<unsigned> (signedValue < 0 ? -signedValue : signedValue));
+	}
+
+	static void FormatPatchValue (char cell[4], bool panParameter,
+							 u8 value, bool valid)
+	{
+		if (!valid)
+		{
+			memcpy (cell, "---", 4);
+			return;
+		}
+
+		if (!panParameter)
+		{
+			snprintf (cell, 4, "%03u", static_cast<unsigned> (value & 0x7F));
+			return;
+		}
+
+		int pan = static_cast<int> (value & 0x7F) - 64;
+		if (pan == 0)
+			memcpy (cell, " C ", 4);
+		else
+			snprintf (cell, 4, "%c%02u", pan < 0 ? '-' : '+',
+				 static_cast<unsigned> (pan < 0 ? -pan : pan));
+	}
+
 	static void FillHDMIRect (CScreenDevice *pScreen, unsigned x, unsigned y,
 							 unsigned width, unsigned height, TScreenColor color)
 	{
@@ -877,17 +918,30 @@ void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 			frame[3][3 + part * 3] = marker;
 		}
 
-		static const char rowLabels[4] = { 'V', 'P', 'R', 'C' };
+		static const char rowLabels[4] = { 'V', 'P', 'C', 'F' };
 		for (unsigned parameter = 0; parameter < 4; ++parameter)
 		{
 			frame[4 + parameter][0] = rowLabels[parameter];
 			for (unsigned part = 0; part < 8; ++part)
 			{
-				char cell[3];
-				FormatCompactValue (cell, parameter == 1,
-					m_nPerformancePartValues[parameter][part],
-					m_bPerformancePartValueValid[parameter][part]);
-				PutVirtualText (frame[4 + parameter], 2 + part * 3, cell);
+				if (parameter < 2)
+				{
+					char cell[3];
+					FormatCompactValue (cell, parameter == 1,
+						m_nPerformancePartValues[parameter][part],
+						m_bPerformancePartValueValid[parameter][part]);
+					PutVirtualText (frame[4 + parameter], 2 + part * 3, cell);
+				}
+				else
+				{
+					// The sign occupies the normally blank separator column;
+					// the two digits remain aligned beneath the Part number.
+					char cell[4];
+					FormatSignedTuneValue (cell,
+						m_nPerformancePartValues[parameter][part],
+						m_bPerformancePartValueValid[parameter][part]);
+					PutVirtualText (frame[4 + parameter], 1 + part * 3, cell);
+				}
 			}
 		}
 		return;
@@ -909,8 +963,8 @@ void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 		PutVirtualText (frame[4 + parameter], 0, bankLabels[bankIndex][parameter]);
 		for (unsigned tone = 0; tone < 4; ++tone)
 		{
-			char cell[3];
-			FormatCompactValue (cell, bankIndex == 0 && parameter == 1,
+			char cell[4];
+			FormatPatchValue (cell, bankIndex == 0 && parameter == 1,
 				m_nPatchToneValues[parameter][tone],
 				m_bPatchToneValueValid[parameter][tone]);
 			PutVirtualText (frame[4 + parameter], 6 + tone * 5, cell);

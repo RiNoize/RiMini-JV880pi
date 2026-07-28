@@ -200,6 +200,12 @@ public:
 	// MIDIButtonsMode and MIDIButtonCh settings as the front-panel mappings.
 	bool GetMIDISurfaceButtonsEnabled (void) const;
 	unsigned GetMIDISurfaceButton (unsigned index) const;
+
+	// Generic MIDI pots/faders. Four physical rows of eight controls are
+	// independently configurable and share one receive channel.
+	bool GetMIDIPotsEnabled (void) const;
+	unsigned GetMIDIPotCh (void) const;
+	unsigned GetMIDIPotControl (unsigned row, unsigned index) const;
 	
 	// Timeouts for button events in milliseconds
 	unsigned GetDoubleClickTimeout (void) const;
@@ -356,6 +362,9 @@ private:
 	unsigned m_nMIDIEncoderDown;
 	bool m_bMIDISurfaceButtonsEnabled;
 	unsigned m_nMIDISurfaceButtons[16];
+	bool m_bMIDIPotsEnabled;
+	unsigned m_nMIDIPotCh;
+	unsigned m_nMIDIPotControls[4][8];
 	unsigned m_nDoubleClickTimeout;
 	unsigned m_nLongPressTimeout;	
 

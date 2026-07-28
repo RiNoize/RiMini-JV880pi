@@ -60,6 +60,9 @@ public:
 	void RenderHDMIDisplay(unsigned long currentTime, const char frame[8][26]);
 	void SetPerformancePartValue(unsigned parameter, unsigned part, uint8_t value);
 	void ClearPerformancePartValues();
+	void SetPatchToneValue(unsigned parameter, unsigned tone, uint8_t value);
+	void ClearPatchToneValues();
+	void SetMIDIPotBank(unsigned bank);
 	CWriteBufferDevice* GetLCDBuffered() { return m_pLCDBuffered; }
 
 	static bool g_ServiceActive;
@@ -127,6 +130,9 @@ private:
 	char m_lastHDMIPanel[8][25];
 	uint8_t m_nPerformancePartValues[4][8];
 	bool m_bPerformancePartValueValid[4][8];
+	uint8_t m_nPatchToneValues[4][4];
+	bool m_bPatchToneValueValid[4][4];
+	unsigned m_nMIDIPotBank = 1;
 	unsigned m_lastHDMIScale;
 	unsigned m_lastHDMIX;
 	unsigned m_lastHDMIY;

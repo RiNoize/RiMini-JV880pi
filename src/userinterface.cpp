@@ -60,6 +60,7 @@ CUserInterface::CUserInterface (CMiniJV880 *pMiniJV880, CGPIOManager *pGPIOManag
 	screen_buffer = (u8 *)malloc(512);
 	memset (m_lastHDMIPanel, 0, sizeof m_lastHDMIPanel);
 	ClearPerformancePartValues ();
+	ClearPatchToneValues ();
 }
 
 CUserInterface::~CUserInterface (void)
@@ -577,6 +578,26 @@ void CUserInterface::ClearPerformancePartValues()
 	memset (m_bPerformancePartValueValid, 0, sizeof m_bPerformancePartValueValid);
 }
 
+void CUserInterface::SetPatchToneValue(unsigned parameter, unsigned tone, uint8_t value)
+{
+	if (parameter >= 4 || tone >= 4)
+		return;
+
+	m_nPatchToneValues[parameter][tone] = value & 0x7F;
+	m_bPatchToneValueValid[parameter][tone] = true;
+}
+
+void CUserInterface::ClearPatchToneValues()
+{
+	memset (m_nPatchToneValues, 0, sizeof m_nPatchToneValues);
+	memset (m_bPatchToneValueValid, 0, sizeof m_bPatchToneValueValid);
+}
+
+void CUserInterface::SetMIDIPotBank(unsigned bank)
+{
+	m_nMIDIPotBank = bank >= 1 && bank <= 4 ? bank : 1;
+}
+
 
 namespace
 {
@@ -666,26 +687,38 @@ namespace
 		return (static_cast<unsigned> (value & 0x7F) * 99u + 63u) / 127u;
 	}
 
-	static void FormatPerformanceValue (char cell[4], unsigned parameter,
-								u8 value, bool valid)
+	static void FormatCompactValue (char cell[3], bool panParameter,
+							 u8 value, bool valid)
 	{
 		if (!valid)
 		{
-			memcpy (cell, "---", 4);
+			memcpy (cell, "--", 3);
 			return;
 		}
 
-		if (parameter == 1)
+		if (panParameter)
 		{
-			const int pan = static_cast<int> (value & 0x7F) - 64;
+			int pan = static_cast<int> (value & 0x7F) - 64;
+			if (pan < -64) pan = -64;
+			if (pan > 63) pan = 63;
 			if (pan == 0)
-				memcpy (cell, "  C", 4);
+			{
+				memcpy (cell, " C", 3);
+			}
 			else
-				snprintf (cell, 4, "%+3d", pan);
+			{
+				const unsigned magnitude = pan < 0
+					? static_cast<unsigned> (-pan)
+					: static_cast<unsigned> (pan);
+				unsigned scaled = (magnitude * 9u + 31u) / 63u;
+				if (scaled == 0) scaled = 1;
+				if (scaled > 9) scaled = 9;
+				snprintf (cell, 3, "%c%u", pan < 0 ? '-' : '+', scaled);
+			}
 			return;
 		}
 
-		snprintf (cell, 4, " %02u", ScaleMIDITo99 (value));
+		snprintf (cell, 3, "%02u", ScaleMIDITo99 (value));
 	}
 
 	static void FillHDMIRect (CScreenDevice *pScreen, unsigned x, unsigned y,
@@ -828,9 +861,8 @@ void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 
 	if (extendedPerformance)
 	{
-		// A 25-column line fits one label plus eight fixed three-character
-		// cells. The header therefore uses exactly the requested compact form:
-		// "Pe 1  2  3  4  5  6  7  8".
+		// Two-character value cells separated by one blank column use the full
+		// 25-column width: "Pe 1  2  3  4  5  6  7  8".
 		PutVirtualText (frame[3], 0, "Pe");
 
 		int partColumns[8];
@@ -851,29 +883,38 @@ void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 			frame[4 + parameter][0] = rowLabels[parameter];
 			for (unsigned part = 0; part < 8; ++part)
 			{
-				char cell[4];
-				FormatPerformanceValue (cell, parameter,
+				char cell[3];
+				FormatCompactValue (cell, parameter == 1,
 					m_nPerformancePartValues[parameter][part],
 					m_bPerformancePartValueValid[parameter][part]);
-				PutVirtualText (frame[4 + parameter], 1 + part * 3, cell);
+				PutVirtualText (frame[4 + parameter], 2 + part * 3, cell);
 			}
 		}
 		return;
 	}
 
-	// Patch mode keeps the four-Tone extended table. The parameter values
-	// are populated by the dedicated pot-bank implementation in a later fix.
-	PutVirtualText (frame[4], 0, "Vol");
-	PutVirtualText (frame[5], 0, "Pan");
-	PutVirtualText (frame[6], 0, "Rev");
-	PutVirtualText (frame[7], 0, "Cho");
-
-	for (unsigned column = 5; column <= 20; column += 5)
+	// Patch pot banks use the four Tone columns already present in the
+	// original extended panel. Banks 1 and 2 expose real working-patch data;
+	// banks 3 and 4 remain reserved.
+	static const char *bankLabels[4][4] = {
+		{ "Vol", "Pan", "Rev", "Cho" },
+		{ "Atk", "Dec", "Res", "Cut" },
+		{ "B3-", "B3-", "B3-", "B3-" },
+		{ "B4-", "B4-", "B4-", "B4-" }
+	};
+	const unsigned bankIndex = m_nMIDIPotBank >= 1 && m_nMIDIPotBank <= 4
+		? m_nMIDIPotBank - 1 : 0;
+	for (unsigned parameter = 0; parameter < 4; ++parameter)
 	{
-		PutVirtualText (frame[4], column, "---");
-		PutVirtualText (frame[5], column, "---");
-		PutVirtualText (frame[6], column, "---");
-		PutVirtualText (frame[7], column, "---");
+		PutVirtualText (frame[4 + parameter], 0, bankLabels[bankIndex][parameter]);
+		for (unsigned tone = 0; tone < 4; ++tone)
+		{
+			char cell[3];
+			FormatCompactValue (cell, bankIndex == 0 && parameter == 1,
+				m_nPatchToneValues[parameter][tone],
+				m_bPatchToneValueValid[parameter][tone]);
+			PutVirtualText (frame[4 + parameter], 6 + tone * 5, cell);
+		}
 	}
 }
 

@@ -192,6 +192,25 @@ void CConfig::Load (void)
 			m_Properties.GetNumber(propertyName, 0) & 0x7F;
 	}
 
+	// Generic MIDI pots/faders. Defaults match a common four-row/eight-column
+	// controller layout, but every CC remains independently configurable.
+	m_bMIDIPotsEnabled = m_Properties.GetNumber("MIDIPotsEnabled", 0) != 0;
+	m_nMIDIPotCh = m_Properties.GetNumber("MIDIPotCh", 0);
+	static const char *potRowNames[4] = { "Upper", "Middle", "Lower", "Fader" };
+	static const unsigned potRowDefaultCC[4] = { 24, 32, 40, 16 };
+	for (unsigned row = 0; row < 4; ++row)
+	{
+		for (unsigned index = 0; index < 8; ++index)
+		{
+			char propertyName[32];
+			snprintf(propertyName, sizeof propertyName,
+				 "MIDIPot%s%u", potRowNames[row], index + 1);
+			m_nMIDIPotControls[row][index] =
+				m_Properties.GetNumber(propertyName,
+					potRowDefaultCC[row] + index) & 0x7F;
+		}
+	}
+
 	m_nDoubleClickTimeout = m_Properties.GetNumber ("DoubleClickTimeout", 400);
 	m_nLongPressTimeout = m_Properties.GetNumber ("LongPressTimeout", 600);
 
@@ -767,6 +786,21 @@ bool CConfig::GetMIDISurfaceButtonsEnabled (void) const
 unsigned CConfig::GetMIDISurfaceButton (unsigned index) const
 {
 	return index < 16 ? m_nMIDISurfaceButtons[index] : 0;
+}
+
+bool CConfig::GetMIDIPotsEnabled (void) const
+{
+	return m_bMIDIPotsEnabled;
+}
+
+unsigned CConfig::GetMIDIPotCh (void) const
+{
+	return m_nMIDIPotCh;
+}
+
+unsigned CConfig::GetMIDIPotControl (unsigned row, unsigned index) const
+{
+	return row < 4 && index < 8 ? m_nMIDIPotControls[row][index] : 0;
 }
 
 bool CConfig::GetEncoderEnabled (void) const

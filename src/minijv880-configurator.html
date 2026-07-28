@@ -587,6 +587,49 @@ MIDISurfaceButton14=77
 MIDISurfaceButton15=78
 MIDISurfaceButton16=79
 
+# Generic MIDI pots/faders (input only) with soft takeover/pickup.
+# 0 = disabled, 1-16 = fixed channel, 17 = Omni.
+# Performance: Upper=Part Volume, Middle=Part Pan, Lower=Reverb switch,
+#              Fader=Chorus switch, Parts 1-8 by physical column.
+# Patch Bank 1: Tone Level, Pan, Reverb Send, Chorus Send (Tones 1-4).
+# Patch Bank 2: Attack, Decay, Resonance, Cutoff (Tones 1-4).
+# Patch Banks 3 and 4 are reserved. Loaded values are read passively from
+# the working Patch/Performance and shown before any physical control moves.
+MIDIPotsEnabled=1
+MIDIPotCh=15
+MIDIPotUpper1=24
+MIDIPotUpper2=25
+MIDIPotUpper3=26
+MIDIPotUpper4=27
+MIDIPotUpper5=28
+MIDIPotUpper6=29
+MIDIPotUpper7=30
+MIDIPotUpper8=31
+MIDIPotMiddle1=32
+MIDIPotMiddle2=33
+MIDIPotMiddle3=34
+MIDIPotMiddle4=35
+MIDIPotMiddle5=36
+MIDIPotMiddle6=37
+MIDIPotMiddle7=38
+MIDIPotMiddle8=39
+MIDIPotLower1=40
+MIDIPotLower2=41
+MIDIPotLower3=42
+MIDIPotLower4=43
+MIDIPotLower5=44
+MIDIPotLower6=45
+MIDIPotLower7=46
+MIDIPotLower8=47
+MIDIPotFader1=16
+MIDIPotFader2=17
+MIDIPotFader3=18
+MIDIPotFader4=19
+MIDIPotFader5=20
+MIDIPotFader6=21
+MIDIPotFader7=22
+MIDIPotFader8=23
+
 # MIDI Encoder Enabled
 MIDIEncoder=1
 MIDIEncoderCC=62
@@ -665,6 +708,8 @@ const T = {
   MIDIButtonCh:    'MIDI receive channel for button messages. 1–16 = specific channel. 17 = Omni (any channel).',
   MIDISaveNVRAM:   'MIDI note or CC number that saves NVRAM state to disk, according to MIDI Buttons Mode.',
   MIDISurfaceButtonsEnabled: 'Enable the generic 16-button control surface. MIDI input only; no LED feedback or controller-specific protocol.',
+  MIDIPotsEnabled: 'Enable generic MIDI potentiometers and faders with pickup. Loaded Patch/Performance values are displayed immediately; controls engage only after reaching the stored value.',
+  MIDIPotCh: 'MIDI receive channel for pots/faders. 1–16 = specific channel; 17 = Omni.',
   MIDIEncoder:     'Simulate the physical rotary encoder via a MIDI CC message.',
   MIDIEncoderCC:   'MIDI CC number assigned to the virtual encoder.',
   MIDIEncoderUp:   'CC value sent when turning clockwise (increment). 0 = value below 64, 1 = value above 64. Default: 1 (CC > 64 = clockwise).',
@@ -1152,6 +1197,47 @@ function build(){
     });
     tbl.appendChild(tbody);
     sub.appendChild(tbl);
+    body.appendChild(sub);
+    root.appendChild(card);
+  }
+
+  {
+    const potsOn=isON('MIDIPotsEnabled');
+    const {card,body}=mkCard('Generic MIDI Pots / Faders','Loaded values + pickup. Performance: Volume, Pan, Reverb switch, Chorus switch. Patch: Mix and Synth banks.',potsOn);
+    card.id='card-midi-pots';
+    const sub=dv(potsOn?'':'sub-off'); sub.id='sub-midi-pots';
+    const enRow=dv('row row-enable');
+    const enLbl=dv('row-label'); enLbl.textContent='MIDI pots enabled';
+    const enC=dv('row-ctrl'); enC.appendChild(mkBool(gI('MIDIPotsEnabled'),gV('MIDIPotsEnabled'),on=>{
+      setTV(gI('MIDIPotsEnabled'),on?'1':'0');
+      sub.className=on?'':'sub-off';
+      updateCardBadge('card-midi-pots',on);
+    }));
+    const enTip=dv('row-tip'); enTip.appendChild(mkTipBtn('MIDIPotsEnabled'));
+    enRow.appendChild(enLbl); enRow.appendChild(enC); enRow.appendChild(enTip);
+    body.appendChild(enRow);
+    mkRow('Receive channel (17 = Omni)','MIDI Pot Ch',mkInp(gI('MIDIPotCh'),gV('MIDIPotCh'),'66px',true),'MIDIPotCh',sub);
+
+    const rows=[
+      ['Upper','Upper row / Volume or Attack'],['Middle','Middle row / Pan or Decay'],['Lower','Lower row / Reverb or Resonance'],['Fader','Fader / Chorus or Cutoff']
+    ];
+    rows.forEach(([key,label])=>{
+      const tbl=el('table','btbl');
+      const thead=el('thead'); thead.innerHTML='<tr><th>'+label+' control</th><th>Incoming CC</th></tr>'; tbl.appendChild(thead);
+      const tbody=el('tbody');
+      for(let part=1;part<=8;part++){
+        const k='MIDIPot'+key+part;
+        const tr=el('tr');
+        const tdN=el('td');
+        tdN.textContent=part<=4
+          ? 'Column '+part+' (Part '+part+' / Tone '+part+')'
+          : 'Column '+part+' (Part '+part+' / Patch reserved)';
+        tdN.style.fontWeight='600';
+        const tdC=el('td'); tdC.appendChild(mkInp(gI(k),gV(k),'100%'));
+        tr.appendChild(tdN); tr.appendChild(tdC); tbody.appendChild(tr);
+      }
+      tbl.appendChild(tbody); sub.appendChild(tbl);
+    });
     body.appendChild(sub);
     root.appendChild(card);
   }

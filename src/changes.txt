@@ -1,3 +1,11 @@
+1.1.0 add-midibuttons - Loaded values and MIDI pickup
+Reads the active working Patch or temporary Performance passively from memory and displays stored values immediately.
+Added generic 4x8 MIDI pots/faders with per-control soft takeover/pickup.
+Performance: Part Volume/Pan and the JV-880 Part Reverb/Chorus switches.
+Patch Bank 1: Level/Pan/Reverb Send/Chorus Send; Bank 2: Attack/Decay/Resonance/Cutoff.
+Compact display: 00-99 and Pan -9/C/+9, with one blank column between Parts.
+No RQ1 SysEx polling, MIDI feedback, or changes under src/emulator.
+
 1.1.0 - Generic MIDI surface buttons fix
 Added generic 16-button MIDI input mapping for Patch Tone Switch/Select, Performance Part On/Off, four pot-bank selectors, expansion navigation and bank navigation.
 No MIDI feedback, no controller-specific code, and no emulator-core changes.

@@ -103,6 +103,11 @@ public:
   int FindPerformancePartColumn(unsigned part) const;
   bool LCDRowContains(unsigned row, const char *text) const;
   void TrackPerformancePartValues(const uint8_t *data, uint8_t length);
+  bool HandleMIDIPotCC(uint8_t channel, uint8_t ccNumber, uint8_t value);
+  void RefreshMIDIPotSnapshot();
+  void ResetMIDIPotPickup();
+  void SendJV880DT1(uint8_t a0, uint8_t a1, uint8_t a2, uint8_t a3, uint8_t value);
+  void SendJV880DT1NibblePair(uint8_t a0, uint8_t a1, uint8_t a2, uint8_t a3, uint8_t value);
   void SelectAdjacentExpansion(bool up);
   void SelectAdjacentBank(bool up);
   void QueuePatchBankSwitch(int bankNumber);
@@ -216,6 +221,30 @@ private:
   uint32_t m_nMIDISurfacePulseDeadline = 0;
 
   unsigned m_nMIDIPotBank = 1;
+
+  static constexpr uint32_t MIDI_POT_SNAPSHOT_INTERVAL_US = 50000;
+  static constexpr uint32_t MIDI_POT_WRITE_HOLD_US = 250000;
+  static constexpr uint8_t MIDI_POT_PICKUP_TOLERANCE = 2;
+  static constexpr unsigned NVRAM_WORKING_PATCH_OFFSET = 0x0D70;
+  static constexpr unsigned PATCH_COMMON_SIZE = 26;
+  static constexpr unsigned PATCH_TONE_SIZE = 84;
+  static constexpr unsigned SRAM_TEMP_PERF_OFFSET = 0x206A;
+  static constexpr unsigned PERF_COMMON_SIZE = 28;
+  static constexpr unsigned PERF_PART_SIZE = 22;
+
+  uint8_t m_nMIDIPotTargets[4][8] = {};
+  bool m_bMIDIPotTargetValid[4][8] = {};
+  uint8_t m_nMIDIPotLastPhysical[4][8] = {};
+  bool m_bMIDIPotLastPhysicalValid[4][8] = {};
+  bool m_bMIDIPotPickedUp[4][8] = {};
+  bool m_bMIDIPotSwitchArmed[4][8] = {};
+  uint32_t m_nMIDIPotWriteTick[4][8] = {};
+  uint32_t m_nMIDIPotSnapshotTick = 0;
+  bool m_bMIDIPotModeValid = false;
+  bool m_bMIDIPotLastPatchMode = true;
+  uint8_t m_nMIDIPotLastIdentity[12] = {};
+  bool m_bMIDIPotIdentityValid = false;
+
   int m_currentBankNumber = 0;
   
 

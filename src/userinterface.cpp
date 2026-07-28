@@ -53,12 +53,14 @@ CUserInterface::CUserInterface (CMiniJV880 *pMiniJV880, CGPIOManager *pGPIOManag
 	m_lastTick (0),
 	m_lastHDMIUpdate (0),
 	m_bHDMIFirstFrame (true),
+	m_bLastStableJVRowsValid (false),
 	m_lastHDMIScale (0),
 	m_lastHDMIX ((unsigned) -1),
 	m_lastHDMIY ((unsigned) -1)
 {
 	screen_buffer = (u8 *)malloc(512);
 	memset (m_lastHDMIPanel, 0, sizeof m_lastHDMIPanel);
+	memset (m_lastStableJVRows, ' ', sizeof m_lastStableJVRows);
 	ClearPerformancePartValues ();
 	ClearPatchToneValues ();
 }
@@ -812,6 +814,37 @@ namespace
 	}
 }
 
+static bool NativeLCDContainsText(const u8 lcdData[80], const char *text)
+{
+	if (!lcdData || !text || *text == 0)
+		return false;
+
+	const unsigned length = strlen(text);
+	if (length > 40)
+		return false;
+
+	for (unsigned row = 0; row < 2; ++row)
+	{
+		const u8 *lcdRow = lcdData + row * 40;
+		for (unsigned col = 0; col + length <= 40; ++col)
+		{
+			bool match = true;
+			for (unsigned index = 0; index < length; ++index)
+			{
+				if (lcdRow[col + index] != static_cast<u8>(text[index]))
+				{
+					match = false;
+					break;
+				}
+			}
+			if (match)
+				return true;
+		}
+	}
+
+	return false;
+}
+
 void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 						 bool emuActive, bool showService)
 {
@@ -841,9 +874,29 @@ void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 					: (char) ch;
 			}
 		}
+
+		// DT1 parameter writes make the original JV firmware display
+		// "Now bulk receiving" briefly. This is a harmless native status
+		// message, but it makes the extended display flash on every pot move.
+		// Preserve the last normal two-line JV frame while that transient is
+		// active; the emulated firmware and audio path remain untouched.
+		const bool bulkReceiving = NativeLCDContainsText(
+			m_pMiniJV880->mcu.lcd.LCD_Data, "Now bulk receiving");
+		if (bulkReceiving && m_bLastStableJVRowsValid)
+		{
+			for (unsigned row = 0; row < 2; ++row)
+				memcpy(frame[row], m_lastStableJVRows[row], VIRTUAL_DISPLAY_COLS);
+		}
+		else if (!bulkReceiving)
+		{
+			for (unsigned row = 0; row < 2; ++row)
+				memcpy(m_lastStableJVRows[row], frame[row], VIRTUAL_DISPLAY_COLS);
+			m_bLastStableJVRowsValid = true;
+		}
 	}
 	else
 	{
+		m_bLastStableJVRowsValid = false;
 		PutVirtualText (frame[0], 0, "Start Mini-JV880pi");
 		char versionLine[64];
 		snprintf (versionLine, sizeof versionLine, "version %s", VERSION_SHORT);

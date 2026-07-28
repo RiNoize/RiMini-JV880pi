@@ -105,6 +105,8 @@ public:
   void TrackPerformancePartValues(const uint8_t *data, uint8_t length);
   bool HandleMIDIPotCC(uint8_t channel, uint8_t ccNumber, uint8_t value);
   void RefreshMIDIPotSnapshot();
+  bool FindCurrentPatchSource(char &bank, unsigned &patchIndex,
+                              const uint8_t *&patchData) const;
   void ResetMIDIPotPickup();
   void SendJV880DT1(uint8_t a0, uint8_t a1, uint8_t a2, uint8_t a3, uint8_t value);
   void SendJV880DT1NibblePair(uint8_t a0, uint8_t a1, uint8_t a2, uint8_t a3, uint8_t value);
@@ -225,7 +227,11 @@ private:
   static constexpr uint32_t MIDI_POT_SNAPSHOT_INTERVAL_US = 50000;
   static constexpr uint32_t MIDI_POT_WRITE_HOLD_US = 250000;
   static constexpr uint8_t MIDI_POT_PICKUP_TOLERANCE = 2;
-  static constexpr unsigned NVRAM_WORKING_PATCH_OFFSET = 0x0D70;
+  static constexpr unsigned PATCH_SIZE = 0x016A;
+  static constexpr unsigned NVRAM_PATCH_INTERNAL = 0x1000;
+  static constexpr unsigned CARDRAM_PATCH_INTERNAL = 0x1000;
+  static constexpr unsigned ROM2_PATCH_PRESET_A = 0x010CE0;
+  static constexpr unsigned ROM2_PATCH_PRESET_B = 0x018CE0;
   static constexpr unsigned PATCH_COMMON_SIZE = 26;
   static constexpr unsigned PATCH_TONE_SIZE = 84;
   static constexpr unsigned SRAM_TEMP_PERF_OFFSET = 0x206A;
@@ -244,6 +250,13 @@ private:
   bool m_bMIDIPotLastPatchMode = true;
   uint8_t m_nMIDIPotLastIdentity[12] = {};
   bool m_bMIDIPotIdentityValid = false;
+  bool m_bMIDIPotPatchSourceValid = false;
+  char m_cMIDIPotPatchBank = 0;
+  unsigned m_nMIDIPotPatchIndex = 0;
+  int m_nMIDIPotPatchMappingBank = -1;
+  unsigned m_nMIDIPotPatchLoadedPotBank = 0;
+  uint8_t m_nMIDIPotPatchCache[2][4][4] = {};
+  bool m_bMIDIPotPatchCacheValid[2][4][4] = {};
 
   int m_currentBankNumber = 0;
   

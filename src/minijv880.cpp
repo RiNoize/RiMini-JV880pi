@@ -416,6 +416,7 @@ bool CMiniJV880::HandleMIDISurfaceButton(uint8_t number, bool pressed)
             m_UI.SetMIDIPotBank(m_nMIDIPotBank);
             m_UI.ClearPatchToneValues();
             ResetMIDIPotPickup();
+            m_nMIDIPotPatchLoadedPotBank = 0;
             m_nMIDIPotSnapshotTick = 0;
             m_UI.LCDMessage("Pot Bank\n%u", m_nMIDIPotBank);
             return true;
@@ -941,6 +942,68 @@ void CMiniJV880::SendJV880DT1NibblePair(uint8_t a0, uint8_t a1,
     mcu.postMidiSC55(message, sizeof message);
 }
 
+bool CMiniJV880::FindCurrentPatchSource(char &bank, unsigned &patchIndex,
+                                         const uint8_t *&patchData) const
+{
+    bank = 0;
+    patchIndex = 0;
+    patchData = nullptr;
+
+    // The native Patch Play display contains an identifier such as I07:,
+    // A01:, B64: or C12:. Read that stable identifier instead of relying on
+    // the Working Patch NVRAM area, which the original firmware does not
+    // refresh on every normal patch selection in Mini-JV880pi.
+    for (unsigned row = 0; row < 2; ++row)
+    {
+        const uint8_t *lcdRow = mcu.lcd.LCD_Data + row * 40;
+        for (unsigned col = 0; col + 3 < 40; ++col)
+        {
+            const char candidateBank = static_cast<char>(lcdRow[col]);
+            if (candidateBank != 'I' && candidateBank != 'A'
+                && candidateBank != 'B' && candidateBank != 'C')
+                continue;
+
+            const uint8_t tens = lcdRow[col + 1];
+            const uint8_t units = lcdRow[col + 2];
+            if (tens < '0' || tens > '9' || units < '0' || units > '9'
+                || lcdRow[col + 3] != ':')
+                continue;
+
+            const unsigned displayedNumber = (tens - '0') * 10u
+                + (units - '0');
+            if (displayedNumber < 1 || displayedNumber > 64)
+                continue;
+
+            bank = candidateBank;
+            patchIndex = displayedNumber - 1;
+
+            switch (bank)
+            {
+            case 'I':
+                patchData = &mcu.nvram[NVRAM_PATCH_INTERNAL
+                    + patchIndex * PATCH_SIZE];
+                return true;
+            case 'C':
+                patchData = &mcu.cardram[CARDRAM_PATCH_INTERNAL
+                    + patchIndex * PATCH_SIZE];
+                return true;
+            case 'A':
+                patchData = &mcu.rom2[ROM2_PATCH_PRESET_A
+                    + patchIndex * PATCH_SIZE];
+                return true;
+            case 'B':
+                patchData = &mcu.rom2[ROM2_PATCH_PRESET_B
+                    + patchIndex * PATCH_SIZE];
+                return true;
+            default:
+                break;
+            }
+        }
+    }
+
+    return false;
+}
+
 void CMiniJV880::RefreshMIDIPotSnapshot()
 {
     if (!m_pConfig->GetMIDIPotsEnabled() || mcu.mcu.pc == 0)
@@ -953,23 +1016,17 @@ void CMiniJV880::RefreshMIDIPotSnapshot()
     m_nMIDIPotSnapshotTick = now;
 
     const bool patchMode = (mcu.jv880_led_state & (1u << 5)) != 0;
-    const uint8_t *identity = patchMode
-        ? &mcu.nvram[NVRAM_WORKING_PATCH_OFFSET]
-        : &mcu.sram[SRAM_TEMP_PERF_OFFSET];
-
     const bool modeChanged = !m_bMIDIPotModeValid
         || patchMode != m_bMIDIPotLastPatchMode;
-    const bool identityChanged = !m_bMIDIPotIdentityValid
-        || memcmp(m_nMIDIPotLastIdentity, identity,
-                  sizeof m_nMIDIPotLastIdentity) != 0;
 
-    if (modeChanged || identityChanged)
+    if (modeChanged)
     {
         ResetMIDIPotPickup();
         memset(m_nMIDIPotWriteTick, 0, sizeof m_nMIDIPotWriteTick);
-        memcpy(m_nMIDIPotLastIdentity, identity,
-               sizeof m_nMIDIPotLastIdentity);
-        m_bMIDIPotIdentityValid = true;
+        m_bMIDIPotIdentityValid = false;
+        m_bMIDIPotPatchSourceValid = false;
+        memset(m_bMIDIPotPatchCacheValid, 0,
+               sizeof m_bMIDIPotPatchCacheValid);
         m_bMIDIPotModeValid = true;
         m_bMIDIPotLastPatchMode = patchMode;
 
@@ -988,11 +1045,7 @@ void CMiniJV880::RefreshMIDIPotSnapshot()
             && now - m_nMIDIPotWriteTick[row][index] < MIDI_POT_WRITE_HOLD_US;
         if (writePending && m_bMIDIPotTargetValid[row][index]
             && value != m_nMIDIPotTargets[row][index])
-        {
-            // The emulator has not consumed our recent DT1 yet. Keep the
-            // just-sent target visible instead of briefly restoring old data.
             return;
-        }
 
         if (m_nMIDIPotWriteTick[row][index] != 0
             && (!m_bMIDIPotTargetValid[row][index]
@@ -1003,8 +1056,6 @@ void CMiniJV880::RefreshMIDIPotSnapshot()
             && m_nMIDIPotTargets[row][index] != value
             && !writePending)
         {
-            // A front-panel edit or another MIDI source changed the value.
-            // Require pickup again for this one physical control.
             m_bMIDIPotPickedUp[row][index] = false;
             m_bMIDIPotSwitchArmed[row][index] = false;
             m_bMIDIPotLastPhysicalValid[row][index] = false;
@@ -1020,45 +1071,125 @@ void CMiniJV880::RefreshMIDIPotSnapshot()
 
     if (!patchMode)
     {
+        const uint8_t *identity = &mcu.sram[SRAM_TEMP_PERF_OFFSET];
+        const bool identityChanged = !m_bMIDIPotIdentityValid
+            || memcmp(m_nMIDIPotLastIdentity, identity,
+                      sizeof m_nMIDIPotLastIdentity) != 0;
+
+        if (identityChanged)
+        {
+            ResetMIDIPotPickup();
+            memset(m_nMIDIPotWriteTick, 0, sizeof m_nMIDIPotWriteTick);
+            memcpy(m_nMIDIPotLastIdentity, identity,
+                   sizeof m_nMIDIPotLastIdentity);
+            m_bMIDIPotIdentityValid = true;
+            m_UI.ClearPerformancePartValues();
+        }
+
         for (unsigned part = 0; part < 8; ++part)
         {
             const unsigned base = SRAM_TEMP_PERF_OFFSET + PERF_COMMON_SIZE
                 + part * PERF_PART_SIZE;
-            updateTarget(0, part, mcu.sram[base + 17], false); // Part Level
-            updateTarget(1, part, mcu.sram[base + 18], false); // Part Pan
-            updateTarget(2, part, mcu.sram[base + 19], false); // Coarse Tune (-48..+48)
-            updateTarget(3, part, mcu.sram[base + 20], false); // Fine Tune (-50..+50)
+            updateTarget(0, part, mcu.sram[base + 17], false);
+            updateTarget(1, part, mcu.sram[base + 18], false);
+            updateTarget(2, part, mcu.sram[base + 19], false);
+            updateTarget(3, part, mcu.sram[base + 20], false);
         }
         return;
     }
 
     m_UI.SetMIDIPotBank(m_nMIDIPotBank);
-    if (m_nMIDIPotBank < 1 || m_nMIDIPotBank > 2)
+
+    char patchBank = 0;
+    unsigned patchIndex = 0;
+    const uint8_t *patchData = nullptr;
+    if (!FindCurrentPatchSource(patchBank, patchIndex, patchData))
     {
-        m_UI.ClearPatchToneValues();
-        for (unsigned row = 0; row < 4; ++row)
-            for (unsigned tone = 0; tone < 4; ++tone)
-                m_bMIDIPotTargetValid[row][tone] = false;
+        // During DT1 reception the native firmware temporarily replaces the
+        // Patch identifier with "Now bulk receiving". Keep the current table
+        // and pickup targets until the normal Patch Play line returns.
         return;
     }
 
-    static const unsigned bank1Offsets[4] = { 67, 68, 82, 83 };
-    static const unsigned bank2Offsets[4] = { 74, 76, 53, 52 };
-    const unsigned *offsets = m_nMIDIPotBank == 1
-        ? bank1Offsets : bank2Offsets;
+    const bool sourceChanged = !m_bMIDIPotPatchSourceValid
+        || patchBank != m_cMIDIPotPatchBank
+        || patchIndex != m_nMIDIPotPatchIndex
+        || m_currentBankNumber != m_nMIDIPotPatchMappingBank;
 
+    static const unsigned bankOffsets[2][4] = {
+        { 67, 68, 82, 83 },
+        { 74, 76, 53, 52 }
+    };
+
+    if (sourceChanged)
+    {
+        ResetMIDIPotPickup();
+        memset(m_nMIDIPotWriteTick, 0, sizeof m_nMIDIPotWriteTick);
+        memset(m_bMIDIPotPatchCacheValid, 0,
+               sizeof m_bMIDIPotPatchCacheValid);
+
+        // Load both implemented pot banks at once. This keeps temporary MIDI
+        // edits visible when moving between Bank 1 and Bank 2, while a real
+        // Patch change still replaces the entire cache with the new Patch.
+        for (unsigned bankIndex = 0; bankIndex < 2; ++bankIndex)
+        {
+            for (unsigned tone = 0; tone < 4; ++tone)
+            {
+                const unsigned base = PATCH_COMMON_SIZE
+                    + tone * PATCH_TONE_SIZE;
+                for (unsigned row = 0; row < 4; ++row)
+                {
+                    uint8_t value = patchData[base + bankOffsets[bankIndex][row]];
+                    if (bankIndex == 1 && row == 2)
+                        value &= 0x7F;
+                    m_nMIDIPotPatchCache[bankIndex][row][tone] = value;
+                    m_bMIDIPotPatchCacheValid[bankIndex][row][tone] = true;
+                }
+            }
+        }
+
+        m_bMIDIPotPatchSourceValid = true;
+        m_cMIDIPotPatchBank = patchBank;
+        m_nMIDIPotPatchIndex = patchIndex;
+        m_nMIDIPotPatchMappingBank = m_currentBankNumber;
+        m_nMIDIPotPatchLoadedPotBank = 0;
+    }
+
+    if (m_nMIDIPotBank < 1 || m_nMIDIPotBank > 2)
+    {
+        if (m_nMIDIPotPatchLoadedPotBank != m_nMIDIPotBank)
+        {
+            m_UI.ClearPatchToneValues();
+            for (unsigned row = 0; row < 4; ++row)
+                for (unsigned tone = 0; tone < 4; ++tone)
+                    m_bMIDIPotTargetValid[row][tone] = false;
+            m_nMIDIPotPatchLoadedPotBank = m_nMIDIPotBank;
+        }
+        return;
+    }
+
+    if (!sourceChanged && m_nMIDIPotPatchLoadedPotBank == m_nMIDIPotBank)
+        return;
+
+    ResetMIDIPotPickup();
+    memset(m_nMIDIPotWriteTick, 0, sizeof m_nMIDIPotWriteTick);
+    m_UI.ClearPatchToneValues();
+    for (unsigned row = 0; row < 4; ++row)
+        for (unsigned tone = 0; tone < 4; ++tone)
+            m_bMIDIPotTargetValid[row][tone] = false;
+
+    const unsigned cacheBank = m_nMIDIPotBank - 1;
     for (unsigned tone = 0; tone < 4; ++tone)
     {
-        const unsigned base = NVRAM_WORKING_PATCH_OFFSET + PATCH_COMMON_SIZE
-            + tone * PATCH_TONE_SIZE;
         for (unsigned row = 0; row < 4; ++row)
         {
-            uint8_t value = mcu.nvram[base + offsets[row]];
-            if (m_nMIDIPotBank == 2 && row == 2)
-                value &= 0x7F; // Resonance shares its byte with Resonance Mode.
-            updateTarget(row, tone, value, true);
+            if (!m_bMIDIPotPatchCacheValid[cacheBank][row][tone])
+                continue;
+            updateTarget(row, tone,
+                m_nMIDIPotPatchCache[cacheBank][row][tone], true);
         }
     }
+    m_nMIDIPotPatchLoadedPotBank = m_nMIDIPotBank;
 }
 
 bool CMiniJV880::HandleMIDIPotCC(uint8_t channel, uint8_t ccNumber,
@@ -1154,25 +1285,12 @@ bool CMiniJV880::HandleMIDIPotCC(uint8_t channel, uint8_t ccNumber,
     {
         static const uint8_t bank1Parameters[4] = { 0x5C, 0x5E, 0x71, 0x72 };
         static const uint8_t bank2Parameters[4] = { 0x69, 0x6B, 0x4B, 0x4A };
-        static const unsigned bank1Offsets[4] = { 67, 68, 82, 83 };
-        static const unsigned bank2Offsets[4] = { 74, 76, 53, 52 };
         const uint8_t parameter = m_nMIDIPotBank == 1
             ? bank1Parameters[row] : bank2Parameters[row];
-        const unsigned nvramOffset = m_nMIDIPotBank == 1
-            ? bank1Offsets[row] : bank2Offsets[row];
-        const unsigned nvramBase = NVRAM_WORKING_PATCH_OFFSET + PATCH_COMMON_SIZE
-            + index * PATCH_TONE_SIZE;
 
-        // Keep the local Working Patch synchronized with the DT1 write. The
-        // display snapshot reads this memory, so the edited value remains
-        // stable instead of reverting on the next refresh.
-        if (m_nMIDIPotBank == 2 && row == 2)
-            mcu.nvram[nvramBase + nvramOffset] =
-                static_cast<uint8_t>((mcu.nvram[nvramBase + nvramOffset] & 0x80)
-                                     | (value & 0x7F));
-        else
-            mcu.nvram[nvramBase + nvramOffset] = value & 0x7F;
-
+        // DT1 updates the temporary Patch used by the emulated JV-880. Keep
+        // the displayed target locally; the stored source Patch is re-read
+        // only when the selected Patch or pot bank actually changes.
         if (m_nMIDIPotBank == 1 && row == 1)
             SendJV880DT1NibblePair(0x00, 0x08,
                 static_cast<uint8_t>(0x28 + index), parameter, value);
@@ -1180,6 +1298,9 @@ bool CMiniJV880::HandleMIDIPotCC(uint8_t channel, uint8_t ccNumber,
             SendJV880DT1(0x00, 0x08,
                 static_cast<uint8_t>(0x28 + index), parameter, value);
 
+        const unsigned cacheBank = m_nMIDIPotBank - 1;
+        m_nMIDIPotPatchCache[cacheBank][row][index] = value;
+        m_bMIDIPotPatchCacheValid[cacheBank][row][index] = true;
         m_UI.SetPatchToneValue(row, index, value);
     }
     else
@@ -1219,6 +1340,10 @@ void CMiniJV880::TrackPerformancePartValues(const uint8_t *pData, uint8_t nLengt
     if ((status & 0xF0) == 0xC0 && nLength >= 2)
     {
         ResetMIDIPotPickup();
+        m_bMIDIPotIdentityValid = false;
+        m_bMIDIPotPatchSourceValid = false;
+        memset(m_bMIDIPotPatchCacheValid, 0,
+               sizeof m_bMIDIPotPatchCacheValid);
         m_nMIDIPotSnapshotTick = 0;
         return;
     }
@@ -1980,6 +2105,13 @@ void CMiniJV880::switchPatchBank(int bankNumber) {
     
     m_currentBankNumber = bankNumber;
     m_currentExpansionRomIndex = romIndex;
+    m_bMIDIPotModeValid = false;
+    m_bMIDIPotIdentityValid = false;
+    m_bMIDIPotPatchSourceValid = false;
+    memset(m_bMIDIPotPatchCacheValid, 0,
+           sizeof m_bMIDIPotPatchCacheValid);
+    m_nMIDIPotSnapshotTick = 0;
+    ResetMIDIPotPickup();
 
     size_t freeAfter = CMemorySystem::Get()->GetHeapFreeSpace(HEAP_ANY);
     LOGNOTE("=== BANK SWITCHED TO: %d ROM index %d (%s), free mem=%.2f MB ===", bankNumber, 

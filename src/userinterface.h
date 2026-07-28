@@ -128,6 +128,8 @@ private:
 	unsigned long m_lastHDMIUpdate;
 	bool m_bHDMIFirstFrame;
 	char m_lastHDMIPanel[8][25];
+	char m_lastStableJVRows[2][25];
+	bool m_bLastStableJVRowsValid;
 	uint8_t m_nPerformancePartValues[4][8];
 	bool m_bPerformancePartValueValid[4][8];
 	uint8_t m_nPatchToneValues[4][4];

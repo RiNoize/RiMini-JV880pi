@@ -589,14 +589,15 @@ MIDISurfaceButton16=79
 
 # Generic MIDI pots/faders (input only) with soft takeover/pickup.
 # 0 = disabled, 1-16 = fixed channel, 17 = Omni.
-# Performance: Upper=Part Volume, Middle=Part Pan, Lower=Reverb switch,
-#              Fader=Chorus switch, Parts 1-8 by physical column.
+# Performance: Upper=Part Volume, Middle=Part Pan, Lower=Coarse Tune,
+#              Fader=Fine Tune, Parts 1-8 by physical column.
 # Patch Bank 1: Tone Level, Pan, Reverb Send, Chorus Send (Tones 1-4).
 # Patch Bank 2: Attack, Decay, Resonance, Cutoff (Tones 1-4).
 # Patch Banks 3 and 4 are reserved. Loaded values are read passively from
 # the working Patch/Performance and shown before any physical control moves.
 MIDIPotsEnabled=1
 MIDIPotCh=15
+# CC 32 remains reserved for Bank Select LSB.
 MIDIPotUpper1=24
 MIDIPotUpper2=25
 MIDIPotUpper3=26
@@ -605,7 +606,7 @@ MIDIPotUpper5=28
 MIDIPotUpper6=29
 MIDIPotUpper7=30
 MIDIPotUpper8=31
-MIDIPotMiddle1=32
+MIDIPotMiddle1=48
 MIDIPotMiddle2=33
 MIDIPotMiddle3=34
 MIDIPotMiddle4=35
@@ -708,7 +709,7 @@ const T = {
   MIDIButtonCh:    'MIDI receive channel for button messages. 1–16 = specific channel. 17 = Omni (any channel).',
   MIDISaveNVRAM:   'MIDI note or CC number that saves NVRAM state to disk, according to MIDI Buttons Mode.',
   MIDISurfaceButtonsEnabled: 'Enable the generic 16-button control surface. MIDI input only; no LED feedback or controller-specific protocol.',
-  MIDIPotsEnabled: 'Enable generic MIDI potentiometers and faders with pickup. Loaded Patch/Performance values are displayed immediately; controls engage only after reaching the stored value.',
+  MIDIPotsEnabled: 'Enable generic MIDI potentiometers and faders with pickup. Loaded Patch/Performance values are displayed immediately; controls engage only after reaching the stored value. CC 32 remains reserved for Bank Select LSB.',
   MIDIPotCh: 'MIDI receive channel for pots/faders. 1–16 = specific channel; 17 = Omni.',
   MIDIEncoder:     'Simulate the physical rotary encoder via a MIDI CC message.',
   MIDIEncoderCC:   'MIDI CC number assigned to the virtual encoder.',
@@ -1203,7 +1204,7 @@ function build(){
 
   {
     const potsOn=isON('MIDIPotsEnabled');
-    const {card,body}=mkCard('Generic MIDI Pots / Faders','Loaded values + pickup. Performance: Volume, Pan, Reverb switch, Chorus switch. Patch: Mix and Synth banks.',potsOn);
+    const {card,body}=mkCard('Generic MIDI Pots / Faders','Loaded values + pickup. Performance: Volume, Pan, Coarse Tune, Fine Tune. Patch: Mix and Synth banks.',potsOn);
     card.id='card-midi-pots';
     const sub=dv(potsOn?'':'sub-off'); sub.id='sub-midi-pots';
     const enRow=dv('row row-enable');
@@ -1219,7 +1220,7 @@ function build(){
     mkRow('Receive channel (17 = Omni)','MIDI Pot Ch',mkInp(gI('MIDIPotCh'),gV('MIDIPotCh'),'66px',true),'MIDIPotCh',sub);
 
     const rows=[
-      ['Upper','Upper row / Volume or Attack'],['Middle','Middle row / Pan or Decay'],['Lower','Lower row / Reverb or Resonance'],['Fader','Fader / Chorus or Cutoff']
+      ['Upper','Upper row / Perf Volume / Patch Level or Attack'],['Middle','Middle row / Perf Pan / Patch Pan or Decay'],['Lower','Lower row / Perf Coarse Tune / Patch Reverb or Resonance'],['Fader','Fader / Perf Fine Tune / Patch Chorus or Cutoff']
     ];
     rows.forEach(([key,label])=>{
       const tbl=el('table','btbl');

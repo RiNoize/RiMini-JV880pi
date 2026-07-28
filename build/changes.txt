@@ -46,3 +46,11 @@ Fixed MCU synchronization in PCM in individual cores using a ring buffer.
     No clicking or grinding sounds. Synchronization does not get lost even after long-term use.
 Returned the screen scroll mode back. It still needs to be sorted out.
 Add versioning system
+
+add-midibuttons: Performance Tune + stable Patch values
+- Performance rows are now Volume, Pan, Coarse Tune and Fine Tune.
+- Coarse Tune displays/edits -48..+48; Fine Tune displays/edits -50..+50.
+- Tune signs use the blank separator column and values use two digits.
+- Patch bank values display their real 000..127 values (Pan -64..C..+63).
+- Patch pot edits update Working Patch memory before DT1, preventing display rollback.
+- CC 32 is restored exclusively to Bank Select LSB; MIDIPotMiddle1 defaults to CC 48.

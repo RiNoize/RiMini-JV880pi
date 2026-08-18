@@ -585,10 +585,7 @@ void CUserInterface::SetPatchToneValue(unsigned parameter, unsigned tone, uint8_
 	if (parameter >= 4 || tone >= 4)
 		return;
 
-	// Bank 1 / Pan can contain 128, which is the JV-880 Random-pan value.
-	// Keep it intact for the display instead of wrapping it to zero.
-	m_nPatchToneValues[parameter][tone] =
-		(m_nMIDIPotBank == 1 && parameter == 1) ? value : (value & 0x7F);
+	m_nPatchToneValues[parameter][tone] = value & 0x7F;
 	m_bPatchToneValueValid[parameter][tone] = true;
 }
 
@@ -756,12 +753,6 @@ namespace
 		if (!panParameter)
 		{
 			snprintf (cell, 4, "%03u", static_cast<unsigned> (value & 0x7F));
-			return;
-		}
-
-		if (value == 128)
-		{
-			memcpy (cell, "Rnd", 4);
 			return;
 		}
 

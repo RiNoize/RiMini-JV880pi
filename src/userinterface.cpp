@@ -61,6 +61,8 @@ CUserInterface::CUserInterface (CMiniJV880 *pMiniJV880, CGPIOManager *pGPIOManag
 	screen_buffer = (u8 *)malloc(512);
 	memset (m_lastHDMIPanel, 0, sizeof m_lastHDMIPanel);
 	memset (m_lastStableJVRows, ' ', sizeof m_lastStableJVRows);
+	memset (m_MIDIMonitorLine, 0, sizeof m_MIDIMonitorLine);
+	m_bMIDIMonitorValid = false;
 	ClearPerformancePartValues ();
 	ClearPatchToneValues ();
 }
@@ -600,6 +602,123 @@ void CUserInterface::SetMIDIPotBank(unsigned bank)
 	m_nMIDIPotBank = bank >= 1 && bank <= 4 ? bank : 1;
 }
 
+void CUserInterface::SetMIDIMonitorMessage(char direction, const u8 *data, unsigned length)
+{
+	if (!data || length == 0)
+		return;
+
+	const u8 status = data[0];
+
+	// MIDI Clock and Active Sensing can arrive continuously. Do not let them
+	// overwrite useful Note/CC/SysEx diagnostics on the single monitor row.
+	if (status == 0xF8 || status == 0xFE)
+		return;
+
+	char line[64];
+	memset(line, 0, sizeof line);
+
+	if (status == 0xF0)
+	{
+		// SysEx: show only the last six bytes before F7. This keeps the useful
+		// Roland address/value/checksum tail visible in one 25-character row.
+		unsigned end = length;
+		if (end > 0 && data[end - 1] == 0xF7)
+			--end;
+		const unsigned start = end > 6 ? end - 6 : 0;
+		int pos = snprintf(line, sizeof line, "%cSX", direction);
+		for (unsigned index = start; index < end && pos > 0
+			&& static_cast<unsigned>(pos) < sizeof(line) - 1; ++index)
+		{
+			pos += snprintf(line + pos, sizeof(line) - static_cast<unsigned>(pos),
+				" %02X", data[index]);
+		}
+	}
+	else if ((status & 0xF0) == 0x80 && length >= 3)
+	{
+		snprintf(line, sizeof line, "%cOFF C%02u N%03u V%03u", direction,
+			(status & 0x0F) + 1u, data[1] & 0x7F, data[2] & 0x7F);
+	}
+	else if ((status & 0xF0) == 0x90 && length >= 3)
+	{
+		const bool noteOn = (data[2] & 0x7F) != 0;
+		snprintf(line, sizeof line, noteOn
+			? "%cON  C%02u N%03u V%03u"
+			: "%cOFF C%02u N%03u V%03u", direction,
+			(status & 0x0F) + 1u, data[1] & 0x7F, data[2] & 0x7F);
+	}
+	else if ((status & 0xF0) == 0xA0 && length >= 3)
+	{
+		snprintf(line, sizeof line, "%cPP  C%02u N%03u P%03u", direction,
+			(status & 0x0F) + 1u, data[1] & 0x7F, data[2] & 0x7F);
+	}
+	else if ((status & 0xF0) == 0xB0 && length >= 3)
+	{
+		snprintf(line, sizeof line, "%cCC  C%02u %03u=%03u", direction,
+			(status & 0x0F) + 1u, data[1] & 0x7F, data[2] & 0x7F);
+	}
+	else if ((status & 0xF0) == 0xC0 && length >= 2)
+	{
+		snprintf(line, sizeof line, "%cPC  C%02u %03u", direction,
+			(status & 0x0F) + 1u, data[1] & 0x7F);
+	}
+	else if ((status & 0xF0) == 0xD0 && length >= 2)
+	{
+		snprintf(line, sizeof line, "%cCP  C%02u P%03u", direction,
+			(status & 0x0F) + 1u, data[1] & 0x7F);
+	}
+	else if ((status & 0xF0) == 0xE0 && length >= 3)
+	{
+		const int bend = static_cast<int>((data[1] & 0x7F)
+			| ((data[2] & 0x7F) << 7)) - 8192;
+		snprintf(line, sizeof line, "%cPB  C%02u %+d", direction,
+			(status & 0x0F) + 1u, bend);
+	}
+	else
+	{
+		switch (status)
+		{
+		case 0xF1:
+			snprintf(line, sizeof line, "%cMTC %03u", direction,
+				length >= 2 ? data[1] & 0x7F : 0);
+			break;
+		case 0xF2:
+		{
+			const unsigned position = length >= 3
+				? static_cast<unsigned>((data[1] & 0x7F)
+					| ((data[2] & 0x7F) << 7)) : 0;
+			snprintf(line, sizeof line, "%cSPP %05u", direction, position);
+			break;
+		}
+		case 0xF3:
+			snprintf(line, sizeof line, "%cSONG %03u", direction,
+				length >= 2 ? data[1] & 0x7F : 0);
+			break;
+		case 0xF6: snprintf(line, sizeof line, "%cTUNE", direction); break;
+		case 0xFA: snprintf(line, sizeof line, "%cSTART", direction); break;
+		case 0xFB: snprintf(line, sizeof line, "%cCONT", direction); break;
+		case 0xFC: snprintf(line, sizeof line, "%cSTOP", direction); break;
+		case 0xFF: snprintf(line, sizeof line, "%cRESET", direction); break;
+		default:
+		{
+			int pos = snprintf(line, sizeof line, "%c%02X", direction, status);
+			for (unsigned index = 1; index < length && index < 6 && pos > 0
+				&& static_cast<unsigned>(pos) < sizeof(line) - 1; ++index)
+			{
+				pos += snprintf(line + pos, sizeof(line) - static_cast<unsigned>(pos),
+					" %02X", data[index]);
+			}
+			break;
+		}
+		}
+	}
+
+	memset(m_MIDIMonitorLine, ' ', 25);
+	m_MIDIMonitorLine[25] = 0;
+	const unsigned lineLength = strlen(line);
+	memcpy(m_MIDIMonitorLine, line, lineLength < 25 ? lineLength : 25);
+	m_bMIDIMonitorValid = true;
+}
+
 
 namespace
 {
@@ -952,6 +1071,15 @@ void CUserInterface::BuildVirtualDisplayFrame(char frame[8][26],
 
 	if (!m_pConfig->GetDisplayInterfaceExtended ())
 		return;
+
+	// Extended interface row 2 is the persistent one-line MIDI monitor.
+	// It replaces the old transient MIDI/LED indication while leaving the
+	// original two JV rows and the five mixer rows untouched.
+	if (!showService && emuActive && m_bMIDIMonitorValid)
+	{
+		memset(frame[2], ' ', VIRTUAL_DISPLAY_COLS);
+		PutVirtualText(frame[2], 0, m_MIDIMonitorLine);
+	}
 
 	if (extendedPerformance)
 	{

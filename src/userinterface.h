@@ -63,6 +63,7 @@ public:
 	void SetPatchToneValue(unsigned parameter, unsigned tone, uint8_t value);
 	void ClearPatchToneValues();
 	void SetMIDIPotBank(unsigned bank);
+	void SetMIDIMonitorMessage(char direction, const u8 *data, unsigned length);
 	CWriteBufferDevice* GetLCDBuffered() { return m_pLCDBuffered; }
 
 	static bool g_ServiceActive;
@@ -135,6 +136,8 @@ private:
 	uint8_t m_nPatchToneValues[4][4];
 	bool m_bPatchToneValueValid[4][4];
 	unsigned m_nMIDIPotBank = 1;
+	char m_MIDIMonitorLine[26];
+	bool m_bMIDIMonitorValid;
 	unsigned m_lastHDMIScale;
 	unsigned m_lastHDMIX;
 	unsigned m_lastHDMIY;

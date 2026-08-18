@@ -923,6 +923,7 @@ void CMiniJV880::SendJV880DT1(uint8_t a0, uint8_t a1, uint8_t a2,
 
     const unsigned sum = a0 + a1 + a2 + a3 + (value & 0x7F);
     message[10] = static_cast<uint8_t>((128 - (sum & 0x7F)) & 0x7F);
+    m_UI.SetMIDIMonitorMessage('>', message, sizeof message);
     mcu.postMidiSC55(message, sizeof message);
 }
 
@@ -939,6 +940,7 @@ void CMiniJV880::SendJV880DT1NibblePair(uint8_t a0, uint8_t a1,
 
     const unsigned sum = a0 + a1 + a2 + a3 + highNibble + lowNibble;
     message[11] = static_cast<uint8_t>((128 - (sum & 0x7F)) & 0x7F);
+    m_UI.SetMIDIMonitorMessage('>', message, sizeof message);
     mcu.postMidiSC55(message, sizeof message);
 }
 
@@ -1372,6 +1374,10 @@ void CMiniJV880::TrackPerformancePartValues(const uint8_t *pData, uint8_t nLengt
 void CMiniJV880::HandleFullMIDIMessage(const uint8_t* pData, uint8_t nLength)
 {
     if (nLength == 0) return;
+
+    // Capture the raw incoming message before any MIDI-button, pot or bank
+    // handler consumes it. This also makes MIDI-button note numbers visible.
+    m_UI.SetMIDIMonitorMessage('<', pData, nLength);
 
     if (0) { // Log
         char buf[256];

@@ -1039,7 +1039,12 @@ void CMiniJV880::RefreshMIDIPotSnapshot()
     auto updateTarget = [this, now](unsigned row, unsigned index,
                                     uint8_t value, bool patchValue) {
         if (row >= 4 || index >= 8) return;
-        value &= 0x7F;
+
+        // Tone Pan uses 0..128 in the JV-880 patch data, where 128 means
+        // Random. Preserve that special value when loading Patch Bank 1.
+        // All other pot targets are ordinary 7-bit values.
+        if (!(patchValue && m_nMIDIPotBank == 1 && row == 1))
+            value &= 0x7F;
 
         const bool writePending = m_nMIDIPotWriteTick[row][index] != 0
             && now - m_nMIDIPotWriteTick[row][index] < MIDI_POT_WRITE_HOLD_US;

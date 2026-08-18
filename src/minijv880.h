@@ -228,6 +228,9 @@ private:
   static constexpr uint32_t MIDI_POT_WRITE_HOLD_US = 250000;
   static constexpr uint8_t MIDI_POT_PICKUP_TOLERANCE = 2;
   static constexpr unsigned PATCH_SIZE = 0x016A;
+  // JV-880 temporary/working Patch area. The currently selected Patch is
+  // edited here; stored ROM/NVRAM/Card slots are only source memories.
+  static constexpr unsigned NVRAM_PATCH_WORKING = 0x0D70;
   static constexpr unsigned NVRAM_PATCH_INTERNAL = 0x1000;
   static constexpr unsigned CARDRAM_PATCH_INTERNAL = 0x1000;
   static constexpr unsigned ROM2_PATCH_PRESET_A = 0x010CE0;

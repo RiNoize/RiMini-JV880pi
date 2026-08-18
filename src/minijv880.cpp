@@ -950,9 +950,9 @@ bool CMiniJV880::FindCurrentPatchSource(char &bank, unsigned &patchIndex,
     patchData = nullptr;
 
     // The native Patch Play display contains an identifier such as I07:,
-    // A01:, B64: or C12:. Read that stable identifier instead of relying on
-    // the Working Patch NVRAM area, which the original firmware does not
-    // refresh on every normal patch selection in Mini-JV880pi.
+    // A01:, B64: or C12:. Use it only to identify which stored Patch was
+    // selected. Parameter values themselves are read from the JV-880
+    // temporary/working Patch area in RefreshMIDIPotSnapshot().
     for (unsigned row = 0; row < 2; ++row)
     {
         const uint8_t *lcdRow = mcu.lcd.LCD_Data + row * 40;
@@ -1039,12 +1039,7 @@ void CMiniJV880::RefreshMIDIPotSnapshot()
     auto updateTarget = [this, now](unsigned row, unsigned index,
                                     uint8_t value, bool patchValue) {
         if (row >= 4 || index >= 8) return;
-
-        // Tone Pan uses 0..128 in the JV-880 patch data, where 128 means
-        // Random. Preserve that special value when loading Patch Bank 1.
-        // All other pot targets are ordinary 7-bit values.
-        if (!(patchValue && m_nMIDIPotBank == 1 && row == 1))
-            value &= 0x7F;
+        value &= 0x7F;
 
         const bool writePending = m_nMIDIPotWriteTick[row][index] != 0
             && now - m_nMIDIPotWriteTick[row][index] < MIDI_POT_WRITE_HOLD_US;
@@ -1128,6 +1123,15 @@ void CMiniJV880::RefreshMIDIPotSnapshot()
 
     if (sourceChanged)
     {
+        // The JV-880 runs and edits the selected Patch from its temporary
+        // Working Patch area. Wait until that buffer has caught up with the
+        // Patch name shown by the native LCD, then snapshot the live values.
+        // Keeping sourceChanged true while the names differ also avoids a
+        // one-Patch-behind read during a program change.
+        const uint8_t *workingPatchData = &mcu.nvram[NVRAM_PATCH_WORKING];
+        if (memcmp(workingPatchData, patchData, 12) != 0)
+            return;
+
         ResetMIDIPotPickup();
         memset(m_nMIDIPotWriteTick, 0, sizeof m_nMIDIPotWriteTick);
         memset(m_bMIDIPotPatchCacheValid, 0,
@@ -1144,7 +1148,7 @@ void CMiniJV880::RefreshMIDIPotSnapshot()
                     + tone * PATCH_TONE_SIZE;
                 for (unsigned row = 0; row < 4; ++row)
                 {
-                    uint8_t value = patchData[base + bankOffsets[bankIndex][row]];
+                    uint8_t value = workingPatchData[base + bankOffsets[bankIndex][row]];
                     if (bankIndex == 1 && row == 2)
                         value &= 0x7F;
                     m_nMIDIPotPatchCache[bankIndex][row][tone] = value;
@@ -1293,9 +1297,22 @@ bool CMiniJV880::HandleMIDIPotCC(uint8_t channel, uint8_t ccNumber,
         const uint8_t parameter = m_nMIDIPotBank == 1
             ? bank1Parameters[row] : bank2Parameters[row];
 
-        // DT1 updates the temporary Patch used by the emulated JV-880. Keep
-        // the displayed target locally; the stored source Patch is re-read
-        // only when the selected Patch or pot bank actually changes.
+        // Keep the JV-880 Working Patch mirror synchronized with the DT1
+        // edit. This is also the source used by the mixer snapshot.
+        static const unsigned patchBankOffsets[2][4] = {
+            { 67, 68, 82, 83 },
+            { 74, 76, 53, 52 }
+        };
+        const unsigned toneBase = NVRAM_PATCH_WORKING + PATCH_COMMON_SIZE
+            + index * PATCH_TONE_SIZE;
+        uint8_t &workingValue = mcu.nvram[toneBase
+            + patchBankOffsets[m_nMIDIPotBank - 1][row]];
+        if (m_nMIDIPotBank == 2 && row == 2)
+            workingValue = static_cast<uint8_t>((workingValue & 0x80)
+                | (value & 0x7F));
+        else
+            workingValue = value;
+
         if (m_nMIDIPotBank == 1 && row == 1)
             SendJV880DT1NibblePair(0x00, 0x08,
                 static_cast<uint8_t>(0x28 + index), parameter, value);

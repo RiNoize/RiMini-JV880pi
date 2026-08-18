@@ -585,9 +585,7 @@ void CUserInterface::SetPatchToneValue(unsigned parameter, unsigned tone, uint8_
 	if (parameter >= 4 || tone >= 4)
 		return;
 
-	// Patch Tone Pan may legitimately be 128 (Random). Do not truncate
-	// Patch values here; parameter-specific formatting handles the range.
-	m_nPatchToneValues[parameter][tone] = value;
+	m_nPatchToneValues[parameter][tone] = value & 0x7F;
 	m_bPatchToneValueValid[parameter][tone] = true;
 }
 
@@ -755,13 +753,6 @@ namespace
 		if (!panParameter)
 		{
 			snprintf (cell, 4, "%03u", static_cast<unsigned> (value & 0x7F));
-			return;
-		}
-
-		// Roland JV-880 Tone Pan: 0..127 = L64..R63, 128 = Random.
-		if (value == 128)
-		{
-			memcpy (cell, "Rnd", 4);
 			return;
 		}
 

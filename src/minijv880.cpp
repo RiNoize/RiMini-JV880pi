@@ -279,6 +279,7 @@ void CMiniJV880::Process(bool bPlugAndPlayUpdated) {
     
     CScheduler* const pScheduler = CScheduler::Get();
 
+    ProcessMIDIPotRQ1();
     RefreshMIDIPotSnapshot();
     m_UI.Process ();
     ProcessMIDISurfaceButtons();
@@ -942,6 +943,275 @@ void CMiniJV880::SendJV880DT1NibblePair(uint8_t a0, uint8_t a1,
     mcu.postMidiSC55(message, sizeof message);
 }
 
+static uint8_t MIDIPotRolandChecksum(const uint8_t *data, unsigned length)
+{
+    unsigned sum = 0;
+    for (unsigned index = 0; index < length; ++index)
+        sum += data[index];
+    return static_cast<uint8_t>((128u - (sum & 0x7Fu)) & 0x7Fu);
+}
+
+void CMiniJV880::StartMIDIPotRQ1Refresh(uint32_t delayUS)
+{
+    memset(m_bMIDIPotPatchCacheValid, 0, sizeof m_bMIDIPotPatchCacheValid);
+    memset(m_nMIDIPotRQ1FieldMask, 0, sizeof m_nMIDIPotRQ1FieldMask);
+    memset(m_bMIDIPotRQ1ToneEnabled, 0, sizeof m_bMIDIPotRQ1ToneEnabled);
+    memset(m_bMIDIPotRQ1ToneEnabledValid, 0,
+           sizeof m_bMIDIPotRQ1ToneEnabledValid);
+
+    m_nMIDIPotRQ1ResponseMask = 0;
+    m_nMIDIPotRQ1QueryTone = 0;
+    m_nMIDIPotRQ1ExpectedTone = 0xFF;
+    m_nMIDIPotRQ1SysExLength = 0;
+    m_bMIDIPotRQ1SysExActive = false;
+    m_bMIDIPotRQ1Active = true;
+
+    const uint32_t now = CTimer::GetClockTicks();
+    // The delay also gives any response belonging to the previous Patch time
+    // to drain while ExpectedTone=FF, so it cannot populate the new snapshot.
+    m_nMIDIPotRQ1NextTick = now + delayUS;
+    m_nMIDIPotRQ1Deadline = now + delayUS + MIDI_POT_RQ1_TIMEOUT_US;
+}
+
+void CMiniJV880::SendMIDIPotRQ1Tone(unsigned tone)
+{
+    if (tone >= 4) return;
+
+    // RQ1 Temporary Patch Tone 1..4: 00 08 28..2B 00,
+    // request 00 00 00 74 bytes.
+    uint8_t message[15] = {
+        0xF0, 0x41, 0x10, 0x46, 0x11,
+        0x00, 0x08, static_cast<uint8_t>(0x28 + tone), 0x00,
+        0x00, 0x00, 0x00, MIDI_POT_RQ1_TONE_SIZE,
+        0x00, 0xF7
+    };
+    message[13] = MIDIPotRolandChecksum(&message[5], 8);
+    mcu.postMidiSC55(message, sizeof message);
+}
+
+void CMiniJV880::UpdateMIDIPotRQ1Cache(uint8_t tone, uint8_t startOffset,
+                                        const uint8_t *data, unsigned length)
+{
+    if (tone >= 4 || data == nullptr || length == 0) return;
+
+    for (unsigned index = 0; index < length; ++index)
+    {
+        const unsigned offset = static_cast<unsigned>(startOffset) + index;
+        if (offset > 0x7F) break;
+        const uint8_t value = data[index] & 0x7F;
+
+        switch (offset)
+        {
+        case 0x03: // Tone Switch
+            m_bMIDIPotRQ1ToneEnabled[tone] = value != 0;
+            m_bMIDIPotRQ1ToneEnabledValid[tone] = true;
+            m_nMIDIPotRQ1FieldMask[tone] |= 0x001;
+            break;
+
+        case 0x4A: // TVF Cutoff
+            m_nMIDIPotPatchCache[1][3][tone] = value;
+            m_bMIDIPotPatchCacheValid[1][3][tone] = true;
+            m_nMIDIPotRQ1FieldMask[tone] |= 0x002;
+            break;
+
+        case 0x4B: // TVF Resonance
+            m_nMIDIPotPatchCache[1][2][tone] = value;
+            m_bMIDIPotPatchCacheValid[1][2][tone] = true;
+            m_nMIDIPotRQ1FieldMask[tone] |= 0x004;
+            break;
+
+        case 0x5C: // Tone Level
+            m_nMIDIPotPatchCache[0][0][tone] = value;
+            m_bMIDIPotPatchCacheValid[0][0][tone] = true;
+            m_nMIDIPotRQ1FieldMask[tone] |= 0x008;
+            break;
+
+        case 0x5E: // Tone Pan high nibble
+            m_nMIDIPotPatchCache[0][1][tone] = static_cast<uint8_t>(
+                ((value & 0x0F) << 4)
+                | (m_nMIDIPotPatchCache[0][1][tone] & 0x0F));
+            m_nMIDIPotRQ1FieldMask[tone] |= 0x010;
+            if ((m_nMIDIPotRQ1FieldMask[tone] & 0x030) == 0x030)
+                m_bMIDIPotPatchCacheValid[0][1][tone] = true;
+            break;
+
+        case 0x5F: // Tone Pan low nibble
+            m_nMIDIPotPatchCache[0][1][tone] = static_cast<uint8_t>(
+                (m_nMIDIPotPatchCache[0][1][tone] & 0xF0)
+                | (value & 0x0F));
+            m_nMIDIPotRQ1FieldMask[tone] |= 0x020;
+            if ((m_nMIDIPotRQ1FieldMask[tone] & 0x030) == 0x030)
+                m_bMIDIPotPatchCacheValid[0][1][tone] = true;
+            break;
+
+        case 0x69: // TVA Attack
+            m_nMIDIPotPatchCache[1][0][tone] = value;
+            m_bMIDIPotPatchCacheValid[1][0][tone] = true;
+            m_nMIDIPotRQ1FieldMask[tone] |= 0x040;
+            break;
+
+        case 0x6B: // TVA Decay
+            m_nMIDIPotPatchCache[1][1][tone] = value;
+            m_bMIDIPotPatchCacheValid[1][1][tone] = true;
+            m_nMIDIPotRQ1FieldMask[tone] |= 0x080;
+            break;
+
+        case 0x71: // Tone Reverb Send
+            m_nMIDIPotPatchCache[0][2][tone] = value;
+            m_bMIDIPotPatchCacheValid[0][2][tone] = true;
+            m_nMIDIPotRQ1FieldMask[tone] |= 0x100;
+            break;
+
+        case 0x72: // Tone Chorus Send
+            m_nMIDIPotPatchCache[0][3][tone] = value;
+            m_bMIDIPotPatchCacheValid[0][3][tone] = true;
+            m_nMIDIPotRQ1FieldMask[tone] |= 0x200;
+            break;
+
+        default:
+            break;
+        }
+    }
+}
+
+void CMiniJV880::ParseMIDIPotSysEx(const uint8_t *message, unsigned length)
+{
+    if (message == nullptr || length < 12
+        || message[0] != 0xF0 || message[1] != 0x41
+        || message[3] != 0x46 || message[4] != 0x12
+        || message[length - 1] != 0xF7)
+        return;
+
+    const unsigned checksumIndex = length - 2;
+    if (checksumIndex <= 9
+        || MIDIPotRolandChecksum(&message[5], checksumIndex - 5)
+            != message[checksumIndex])
+        return;
+
+    if (!m_bMIDIPotRQ1Active || m_nMIDIPotRQ1ExpectedTone >= 4)
+        return;
+    if (message[5] != 0x00 || message[6] != 0x08
+        || message[7] < 0x28 || message[7] > 0x2B)
+        return;
+
+    const uint8_t tone = static_cast<uint8_t>(message[7] - 0x28);
+    if (tone != m_nMIDIPotRQ1ExpectedTone)
+        return;
+
+    const uint8_t startOffset = message[8] & 0x7F;
+    const unsigned dataLength = checksumIndex - 9;
+    UpdateMIDIPotRQ1Cache(tone, startOffset, &message[9], dataLength);
+
+    // Roland may return the requested Tone in one DT1 or several fragments.
+    // Advance only after every field needed by both mixer banks arrived.
+    if ((m_nMIDIPotRQ1FieldMask[tone] & MIDI_POT_RQ1_REQUIRED_FIELDS)
+        == MIDI_POT_RQ1_REQUIRED_FIELDS)
+    {
+        m_nMIDIPotRQ1ResponseMask |= static_cast<uint8_t>(1u << tone);
+        m_nMIDIPotRQ1ExpectedTone = 0xFF;
+        m_nMIDIPotRQ1QueryTone = tone + 1;
+        m_nMIDIPotRQ1NextTick = CTimer::GetClockTicks() + 50000;
+
+        if (m_nMIDIPotRQ1ResponseMask == 0x0F)
+        {
+            m_bMIDIPotRQ1Active = false;
+            m_nMIDIPotPatchLoadedPotBank = 0;
+            m_nMIDIPotSnapshotTick = 0;
+        }
+    }
+}
+
+void CMiniJV880::DrainMIDIPotMIDIOut()
+{
+    uint8_t byte = 0;
+    while (mcu.ReadUARTTX(&byte))
+    {
+        if (byte == 0xF0)
+        {
+            m_bMIDIPotRQ1SysExActive = true;
+            m_nMIDIPotRQ1SysExLength = 0;
+        }
+        if (!m_bMIDIPotRQ1SysExActive)
+            continue;
+
+        if (m_nMIDIPotRQ1SysExLength >= sizeof m_nMIDIPotRQ1SysEx)
+        {
+            m_bMIDIPotRQ1SysExActive = false;
+            m_nMIDIPotRQ1SysExLength = 0;
+            continue;
+        }
+
+        m_nMIDIPotRQ1SysEx[m_nMIDIPotRQ1SysExLength++] = byte;
+        if (byte == 0xF7)
+        {
+            ParseMIDIPotSysEx(m_nMIDIPotRQ1SysEx,
+                              m_nMIDIPotRQ1SysExLength);
+            m_bMIDIPotRQ1SysExActive = false;
+            m_nMIDIPotRQ1SysExLength = 0;
+        }
+    }
+}
+
+void CMiniJV880::ProcessMIDIPotRQ1()
+{
+    // Always drain captured MIDI OUT. When no query is active, replies or
+    // other outgoing bytes are simply discarded, matching the old behavior.
+    DrainMIDIPotMIDIOut();
+
+    if (!m_bMIDIPotRQ1Active || mcu.mcu.pc == 0)
+        return;
+
+    const bool patchMode = (mcu.jv880_led_state & (1u << 5)) != 0;
+    if (!patchMode)
+    {
+        m_bMIDIPotRQ1Active = false;
+        m_nMIDIPotRQ1ExpectedTone = 0xFF;
+        return;
+    }
+
+    const uint32_t now = CTimer::GetClockTicks();
+    if (static_cast<int32_t>(now - m_nMIDIPotRQ1Deadline) >= 0)
+    {
+        // Publish any complete fields we did receive rather than leave the
+        // mixer permanently blank if one RQ1 reply was lost.
+        m_bMIDIPotRQ1Active = false;
+        m_nMIDIPotRQ1ExpectedTone = 0xFF;
+        m_nMIDIPotPatchLoadedPotBank = 0;
+        m_nMIDIPotSnapshotTick = 0;
+        return;
+    }
+
+    if (static_cast<int32_t>(now - m_nMIDIPotRQ1NextTick) < 0)
+        return;
+
+    unsigned tone = m_nMIDIPotRQ1ExpectedTone;
+    if (tone >= 4)
+    {
+        tone = m_nMIDIPotRQ1QueryTone;
+        while (tone < 4 && (m_nMIDIPotRQ1ResponseMask & (1u << tone)))
+            ++tone;
+        if (tone >= 4)
+        {
+            tone = 0;
+            while (tone < 4 && (m_nMIDIPotRQ1ResponseMask & (1u << tone)))
+                ++tone;
+        }
+        if (tone >= 4)
+        {
+            m_bMIDIPotRQ1Active = false;
+            m_nMIDIPotPatchLoadedPotBank = 0;
+            m_nMIDIPotSnapshotTick = 0;
+            return;
+        }
+        m_nMIDIPotRQ1ExpectedTone = static_cast<uint8_t>(tone);
+    }
+
+    // If no complete reply arrived within the retry interval, request the
+    // same Tone again. Partial fragments already received remain cached.
+    SendMIDIPotRQ1Tone(tone);
+    m_nMIDIPotRQ1NextTick = now + MIDI_POT_RQ1_RETRY_US;
+}
+
 bool CMiniJV880::FindCurrentPatchSource(char &bank, unsigned &patchIndex,
                                          const uint8_t *&patchData) const
 {
@@ -1121,43 +1391,29 @@ void CMiniJV880::RefreshMIDIPotSnapshot()
         || patchIndex != m_nMIDIPotPatchIndex
         || m_currentBankNumber != m_nMIDIPotPatchMappingBank;
 
-    static const unsigned bankOffsets[2][4] = {
-        { 67, 68, 82, 83 },
-        { 74, 76, 53, 52 }
-    };
-
     if (sourceChanged)
     {
         ResetMIDIPotPickup();
         memset(m_nMIDIPotWriteTick, 0, sizeof m_nMIDIPotWriteTick);
         memset(m_bMIDIPotPatchCacheValid, 0,
                sizeof m_bMIDIPotPatchCacheValid);
-
-        // Load both implemented pot banks at once. This keeps temporary MIDI
-        // edits visible when moving between Bank 1 and Bank 2, while a real
-        // Patch change still replaces the entire cache with the new Patch.
-        for (unsigned bankIndex = 0; bankIndex < 2; ++bankIndex)
-        {
+        for (unsigned row = 0; row < 4; ++row)
             for (unsigned tone = 0; tone < 4; ++tone)
-            {
-                const unsigned base = PATCH_COMMON_SIZE
-                    + tone * PATCH_TONE_SIZE;
-                for (unsigned row = 0; row < 4; ++row)
-                {
-                    uint8_t value = patchData[base + bankOffsets[bankIndex][row]];
-                    if (bankIndex == 1 && row == 2)
-                        value &= 0x7F;
-                    m_nMIDIPotPatchCache[bankIndex][row][tone] = value;
-                    m_bMIDIPotPatchCacheValid[bankIndex][row][tone] = true;
-                }
-            }
-        }
+                m_bMIDIPotTargetValid[row][tone] = false;
 
         m_bMIDIPotPatchSourceValid = true;
         m_cMIDIPotPatchBank = patchBank;
         m_nMIDIPotPatchIndex = patchIndex;
         m_nMIDIPotPatchMappingBank = m_currentBankNumber;
         m_nMIDIPotPatchLoadedPotBank = 0;
+        m_UI.ClearPatchToneValues();
+
+        // The Patch identifier above is still useful to detect selection, but
+        // the actual Tone values are requested from the live Temporary Patch.
+        // This gives us the Roland SysEx representation directly (not packed
+        // ROM bytes), especially important for Pan, Reverb and Chorus.
+        StartMIDIPotRQ1Refresh();
+        return;
     }
 
     if (m_nMIDIPotBank < 1 || m_nMIDIPotBank > 2)
@@ -1186,6 +1442,12 @@ void CMiniJV880::RefreshMIDIPotSnapshot()
     const unsigned cacheBank = m_nMIDIPotBank - 1;
     for (unsigned tone = 0; tone < 4; ++tone)
     {
+        // Disabled Tones often contain harmless defaults such as Send=0 or
+        // Pan=Random. Do not present those as active mixer values.
+        if (!m_bMIDIPotRQ1ToneEnabledValid[tone]
+            || !m_bMIDIPotRQ1ToneEnabled[tone])
+            continue;
+
         for (unsigned row = 0; row < 4; ++row)
         {
             if (!m_bMIDIPotPatchCacheValid[cacheBank][row][tone])

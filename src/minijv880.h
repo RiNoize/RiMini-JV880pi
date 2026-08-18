@@ -110,6 +110,13 @@ public:
   void ResetMIDIPotPickup();
   void SendJV880DT1(uint8_t a0, uint8_t a1, uint8_t a2, uint8_t a3, uint8_t value);
   void SendJV880DT1NibblePair(uint8_t a0, uint8_t a1, uint8_t a2, uint8_t a3, uint8_t value);
+  void ProcessMIDIPotRQ1();
+  void StartMIDIPotRQ1Refresh(uint32_t delayUS = 450000);
+  void SendMIDIPotRQ1Tone(unsigned tone);
+  void DrainMIDIPotMIDIOut();
+  void ParseMIDIPotSysEx(const uint8_t *message, unsigned length);
+  void UpdateMIDIPotRQ1Cache(uint8_t tone, uint8_t startOffset,
+                             const uint8_t *data, unsigned length);
   void SelectAdjacentExpansion(bool up);
   void SelectAdjacentBank(bool up);
   void QueuePatchBankSwitch(int bankNumber);
@@ -257,6 +264,25 @@ private:
   unsigned m_nMIDIPotPatchLoadedPotBank = 0;
   uint8_t m_nMIDIPotPatchCache[2][4][4] = {};
   bool m_bMIDIPotPatchCacheValid[2][4][4] = {};
+
+  // Live Temporary-Patch readback through the emulated JV-880's own
+  // RQ1/DT1 MIDI path. This avoids guessing the packed ROM representation.
+  static constexpr uint8_t MIDI_POT_RQ1_TONE_SIZE = 0x74;
+  static constexpr uint16_t MIDI_POT_RQ1_REQUIRED_FIELDS = 0x03FF;
+  static constexpr uint32_t MIDI_POT_RQ1_RETRY_US = 300000;
+  static constexpr uint32_t MIDI_POT_RQ1_TIMEOUT_US = 5000000;
+  bool m_bMIDIPotRQ1Active = false;
+  unsigned m_nMIDIPotRQ1QueryTone = 0;
+  uint8_t m_nMIDIPotRQ1ExpectedTone = 0xFF;
+  uint8_t m_nMIDIPotRQ1ResponseMask = 0;
+  uint16_t m_nMIDIPotRQ1FieldMask[4] = {};
+  bool m_bMIDIPotRQ1ToneEnabled[4] = {};
+  bool m_bMIDIPotRQ1ToneEnabledValid[4] = {};
+  uint32_t m_nMIDIPotRQ1NextTick = 0;
+  uint32_t m_nMIDIPotRQ1Deadline = 0;
+  uint8_t m_nMIDIPotRQ1SysEx[256] = {};
+  unsigned m_nMIDIPotRQ1SysExLength = 0;
+  bool m_bMIDIPotRQ1SysExActive = false;
 
   int m_currentBankNumber = 0;
   

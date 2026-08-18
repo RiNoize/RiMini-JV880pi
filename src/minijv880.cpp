@@ -1123,14 +1123,13 @@ void CMiniJV880::RefreshMIDIPotSnapshot()
 
     if (sourceChanged)
     {
-        // The JV-880 runs and edits the selected Patch from its temporary
-        // Working Patch area. Wait until that buffer has caught up with the
-        // Patch name shown by the native LCD, then snapshot the live values.
-        // Keeping sourceChanged true while the names differ also avoids a
-        // one-Patch-behind read during a program change.
+        // The native LCD Patch identifier is updated by the JV-880 firmware
+        // after the Program Change has been processed. At that point the
+        // temporary Working Patch at 0x0D70 is the authoritative live copy.
+        // Do not compare its 12-byte name against the source ROM/NVRAM slot:
+        // the firmware representation is not guaranteed to match byte-for-byte
+        // and that comparison could leave the mixer snapshot permanently empty.
         const uint8_t *workingPatchData = &mcu.nvram[NVRAM_PATCH_WORKING];
-        if (memcmp(workingPatchData, patchData, 12) != 0)
-            return;
 
         ResetMIDIPotPickup();
         memset(m_nMIDIPotWriteTick, 0, sizeof m_nMIDIPotWriteTick);

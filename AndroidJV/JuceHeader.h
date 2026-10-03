@@ -1,5 +1,9 @@
 #pragma once
 #include "BuildConfig.h"
+// The Activity host and native startup status use JUCE's Android JNI helpers.
+#if defined(__ANDROID__)
+ #define JUCE_CORE_INCLUDE_JNI_HELPERS 1
+#endif
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>

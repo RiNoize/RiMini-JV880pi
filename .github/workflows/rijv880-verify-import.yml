@@ -19,7 +19,7 @@ jobs:
           run-id: 37143154227
           github-token: ${{ github.token }}
           path: AndroidJV/dist
-      - name: Prepare fixture storage and select ExternalStorage DocumentsProvider
+      - name: Prepare storage, foreground readiness and ExternalStorage DocumentsProvider
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -48,8 +48,27 @@ jobs:
            require(root,'Download');root=dump('internal-download')
            require(root,'RiJV-Import-Test');return dump('fixture-folder')
           '''+t[end:]
+          old=" shell('am','start','-W','-n',PKG+'/com.rmsl.juce.JuceActivity')\n time.sleep(4);shot('startup')"
+          new=''' launched=False
+           launch_log=[]
+           for attempt in range(5):
+            launch_log.append(shell('am','start','-W','-n',PKG+'/com.rmsl.juce.JuceActivity'))
+            (OUT/'launch.txt').write_text(''.join(launch_log))
+            for tick in range(10):
+             view=shell('dumpsys','activity','activities')
+             boot=adb('logcat','-d','-s','RiJV880Boot:I','*:S')
+             if 'UI_READY' in boot and any(PKG in line and 'ResumedActivity' in line for line in view.splitlines()):
+              launched=True;break
+             time.sleep(1)
+            if launched:break
+           (OUT/'startup-logcat.txt').write_text(adb('logcat','-d'))
+           assert launched,'App did not reach UI_READY in foreground'
+           time.sleep(2);shot('startup')'''
+          assert old in t
+          t=t.replace(old,new)
           p.write_text(t)
           Path('executed-test-import.py').write_text(t)
+          compile(t,str(p),'exec')
           PY
       - name: Exercise ZIP, BIN, five BINs using the real Android picker
         timeout-minutes: 9

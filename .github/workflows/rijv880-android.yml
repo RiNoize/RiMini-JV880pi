@@ -49,6 +49,7 @@ jobs:
           PY
           python3 AndroidJV/startup_fix.py
           python3 AndroidJV/import_fix.py
+          python3 AndroidJV/eof_fix.py
           python3 -m py_compile AndroidJV/*.py
       - name: Set up compiler cache
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ccache

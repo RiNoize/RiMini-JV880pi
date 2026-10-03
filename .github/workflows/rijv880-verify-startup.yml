@@ -23,17 +23,18 @@ jobs:
           run-id: 37140786321
           github-token: ${{ github.token }}
           path: AndroidJV/dist
-      - name: Bound all setup and device waits and use supported software graphics
+      - name: Bound setup waits and use a consistent AVD home
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p=Path('AndroidJV/smoke_android.sh')
           t=p.read_text()
-          t=t.replace('set -euo pipefail','set -euxo pipefail')
+          t=t.replace('set -euo pipefail','set -euxo pipefail\nunset ANDROID_SDK_HOME\nexport ANDROID_USER_HOME="$HOME/.android"\nexport ANDROID_EMULATOR_HOME="$HOME/.android"\nexport ANDROID_AVD_HOME="$HOME/.android/avd"\nmkdir -p "$ANDROID_AVD_HOME"')
           t=t.replace('trap \'adb logcat', 'trap \'timeout 10 adb logcat')
           t=t.replace('; adb shell dumpsys', '; timeout 10 adb shell dumpsys')
           t=t.replace('; adb emu kill', '; timeout 10 adb emu kill')
           t=t.replace('sdkmanager --install', 'timeout 240 sdkmanager --install')
+          t=t.replace("--device 'pixel_tablet'", "--device 'pixel_tablet' --path \"$ANDROID_AVD_HOME/rijv880-smoke.avd\"\nemulator -list-avds | tee \"$OUT/avds.txt\"\ngrep -qx rijv880-smoke \"$OUT/avds.txt\"")
           t=t.replace('-gpu swiftshader_indirect', '-gpu software')
           t=t.replace('adb wait-for-device', 'timeout 120 adb wait-for-device')
           t=t.replace('adb shell getprop sys.boot_completed', 'timeout 5 adb shell getprop sys.boot_completed')

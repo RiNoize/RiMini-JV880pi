@@ -37,7 +37,7 @@ jobs:
           run-id: 37133099836
           github-token: ${{ github.token }}
           path: .previous-build
-      - name: Preserve signing and apply startup and SAF repairs
+      - name: Preserve signing and apply document I/O repairs
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -50,6 +50,7 @@ jobs:
           python3 AndroidJV/startup_fix.py
           python3 AndroidJV/import_fix.py
           python3 AndroidJV/eof_fix.py
+          python3 AndroidJV/native_uri_fix.py
           python3 -m py_compile AndroidJV/*.py
       - name: Set up compiler cache
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ccache

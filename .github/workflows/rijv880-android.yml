@@ -13,7 +13,7 @@ concurrency:
 jobs:
   android:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -37,7 +37,7 @@ jobs:
           run-id: 37133099836
           github-token: ${{ github.token }}
           path: .previous-build
-      - name: Preserve update compatibility and apply startup repair
+      - name: Preserve signing and apply startup and SAF repairs
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -48,6 +48,7 @@ jobs:
           p.write_bytes(z.read('RiJV880/AndroidJV/signing/local-test.keystore'))
           PY
           python3 AndroidJV/startup_fix.py
+          python3 AndroidJV/import_fix.py
           python3 -m py_compile AndroidJV/*.py
       - name: Set up compiler cache
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ccache
@@ -71,9 +72,12 @@ jobs:
           name: RiJV880-AndroidTest-${{ matrix.abi }}
           path: AndroidJV/dist/
           retention-days: 30
-      - name: Android 16 first-launch and import-screen smoke test (no ROMs)
+      - name: Android 16 ZIP and BIN document import (synthetic fixtures, no ROMs)
         if: matrix.abi == 'x86_64'
-        run: bash AndroidJV/smoke_android.sh
+        timeout-minutes: 9
+        run: |
+          set -o pipefail
+          python3 -u AndroidJV/test_import.py 2>&1 | tee import-test.log
       - uses: actions/cache/save@v4
         if: always()
         with:
@@ -85,6 +89,7 @@ jobs:
           name: android-diagnostics-${{ matrix.abi }}
           path: |
             build-android.log
+            import-test.log
             previous-cert.txt
             current-cert.txt
             AndroidJV/test-results/

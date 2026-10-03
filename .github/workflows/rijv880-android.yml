@@ -1,0 +1,47 @@
+name: RiJV880 Android Test
+on:
+  push:
+    branches: [android-virtualjv-test]
+    paths: ['AndroidJV/**', '.github/workflows/rijv880-android.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rijv880-android-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch VirtualJV source (no ROMs)
+        uses: actions/checkout@v4
+        with:
+          repository: giulioz/jv880_juce
+          ref: main
+          path: .deps/virtualjv
+      - name: Source provenance snapshot
+        run: |
+          mkdir -p out
+          git -C .deps/virtualjv rev-parse HEAD > out/virtualjv-commit.txt
+          git -C .deps/virtualjv archive --format=zip --output="$GITHUB_WORKSPACE/out/VirtualJV-upstream.zip" HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: virtualjv-upstream-snapshot
+          path: out/
+          retention-days: 7
+      - name: Build ARM64 Android app when sources are present
+        shell: bash
+        run: |
+          if [ -f AndroidJV/build.py ]; then
+            python3 AndroidJV/build.py --sdk "$ANDROID_HOME" --upstream "$GITHUB_WORKSPACE/.deps/virtualjv"
+          else
+            echo 'Source snapshot stage only; Android implementation is not present yet.'
+          fi
+      - uses: actions/upload-artifact@v4
+        if: ${{ hashFiles('AndroidJV/dist/*') != '' }}
+        with:
+          name: RiJV880-AndroidTest-arm64
+          path: AndroidJV/dist/
+          retention-days: 30

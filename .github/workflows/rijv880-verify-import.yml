@@ -1,0 +1,55 @@
+name: RiJV880 Verify Import
+on:
+  push:
+    branches: [android-virtualjv-test]
+    paths: ['.github/workflows/rijv880-verify-import.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  document-import:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: RiJV880-AndroidTest-x86_64
+          run-id: 37143154227
+          github-token: ${{ github.token }}
+          path: AndroidJV/dist
+      - name: Wait for shared storage and keep fixture directory explicit
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('AndroidJV/test_import.py')
+          t=p.read_text()
+          t=t.replace("  if n.get('text','')==text or n.get('content-desc','')==text:return n", "  if n.get('text','').lower()==text.lower() or n.get('content-desc','').lower()==text.lower():return n")
+          old=" adb('push',fixture,'/sdcard/Download/')"
+          new=''' for attempt in range(40):
+            ready=shell('mkdir -p /sdcard/Download/RiJV-Import-Test && touch /sdcard/Download/RiJV-Import-Test/.ready && echo STORAGE_READY',check=False)
+            if 'STORAGE_READY' in ready:break
+            time.sleep(2)
+           else:raise RuntimeError('Shared storage never became writable: '+ready)
+           for f in fixture.iterdir():
+            print(adb('push',f,'/sdcard/Download/RiJV-Import-Test/'+f.name),flush=True)'''
+          assert old in t
+          t=t.replace(old,new)
+          p.write_text(t)
+          Path('executed-test-import.py').write_text(t)
+          PY
+      - name: Exercise ZIP, BIN, five BINs using the real Android picker
+        timeout-minutes: 9
+        run: |
+          set -o pipefail
+          python3 -u AndroidJV/test_import.py 2>&1 | tee import-test.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: RiJV880-document-import-results
+          path: |
+            executed-test-import.py
+            import-test.log
+            AndroidJV/test-results/
+          retention-days: 14

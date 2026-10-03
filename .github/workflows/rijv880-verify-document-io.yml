@@ -1,0 +1,64 @@
+name: RiJV880 Verify Document IO
+on:
+  push:
+    branches: [android-virtualjv-test]
+    paths: ['.github/workflows/rijv880-verify-document-io.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: rijv880-verify-document-io-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  document-io:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: RiJV880-AndroidTest-x86_64
+          run-id: 37144445375
+          github-token: ${{ github.token }}
+          path: AndroidJV/dist
+      - name: Use the test shipped with the final APK and wait for directory loading
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          z=ZipFile('AndroidJV/dist/RiJV880-AndroidTest-v0.1.2-fuentes.zip')
+          t=z.read('RiJV880/AndroidJV/test_import.py').decode()
+          old="""def require(root,text,long=False):
+           n=find(root,text)
+           if n is None:raise RuntimeError('Missing '+text+': '+str([label(n) for n in root.iter('node')]))
+           tap(n,long)"""
+          new="""def require(root,text,long=False):
+           for attempt in range(10):
+            n=find(root,text)
+            if n is not None:
+             tap(n,long);return
+            time.sleep(0.8)
+            root=dump('wait-for-'+re.sub(r'[^a-zA-Z0-9]','_',text))
+           raise RuntimeError('Missing '+text+': '+str([label(n) for n in root.iter('node')]))"""
+          assert old in t
+          t=t.replace(old,new)
+          t=t.replace("time.sleep(2);shot('startup')", "time.sleep(12);shot('startup')")
+          compile(t,'test_import.py','exec')
+          Path('AndroidJV/test_import.py').write_text(t)
+          Path('executed-test-import.py').write_text(t)
+          PY
+      - name: Exercise ZIP, single BIN and five-BIN selections in Android 16
+        timeout-minutes: 9
+        run: |
+          set -o pipefail
+          python3 -u AndroidJV/test_import.py 2>&1 | tee document-io.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: RiJV880-final-document-io
+          path: |
+            executed-test-import.py
+            document-io.log
+            AndroidJV/test-results/
+          retention-days: 14

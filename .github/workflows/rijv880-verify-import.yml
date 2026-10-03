@@ -19,7 +19,7 @@ jobs:
           run-id: 37143154227
           github-token: ${{ github.token }}
           path: AndroidJV/dist
-      - name: Wait for shared storage and keep fixture directory explicit
+      - name: Prepare fixture storage and select ExternalStorage DocumentsProvider
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -36,6 +36,18 @@ jobs:
             print(adb('push',f,'/sdcard/Download/RiJV-Import-Test/'+f.name),flush=True)'''
           assert old in t
           t=t.replace(old,new)
+          start=t.index('def picker():')
+          end=t.index('def result(',start)
+          t=t[:start]+'''def picker():
+           size=shell('wm','size'); w,h=map(int,re.findall(r'(\\d+)x(\\d+)',size)[-1])
+           shell('input','tap',int(w*.348),int(h*.035));time.sleep(1.2)
+           root=dump('picker-open')
+           if find(root,'sdk_gphone64_x86_64') is None:
+            require(root,'Show roots');root=dump('roots')
+           require(root,'sdk_gphone64_x86_64');root=dump('internal-storage')
+           require(root,'Download');root=dump('internal-download')
+           require(root,'RiJV-Import-Test');return dump('fixture-folder')
+          '''+t[end:]
           p.write_text(t)
           Path('executed-test-import.py').write_text(t)
           PY

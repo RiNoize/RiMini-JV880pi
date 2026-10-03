@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Build and package RiJV880 Android Test. Linux, Python 3, Java 17+, CMake, Ninja."""
-import argparse, hashlib, json, os, shutil, subprocess, sys, zipfile
+"""Build RiJV880 Android Test on Linux with Java 17+, Python 3, CMake and Ninja."""
+import argparse, hashlib, json, os, shutil, subprocess, zipfile
 from pathlib import Path
 from patch_upstream import patch
+from compat import prepare
 HERE=Path(__file__).resolve().parent
 VJV='bc141fc8b7a5039e909807e85ff1070d5727584b'
 JUCE='91ad83ae34a81e0833b1a2b0866f54846370ae53'
@@ -11,13 +12,20 @@ def run(*args):
     print('+',' '.join(map(str,args)),flush=True)
     subprocess.run(list(map(str,args)),check=True)
 def revision(path):
-    return subprocess.check_output(['git','-C',str(path),'rev-parse','HEAD'],text=True).strip()
+    # Extracted source distributions do not contain Git internals.
+    if (path/'.git').exists():
+        return subprocess.check_output(['git','-C',str(path),'rev-parse','HEAD'],text=True).strip()
+    marker=path/'PINNED-COMMIT.txt'
+    if marker.exists(): return marker.read_text().strip()
+    raise RuntimeError(f'{path}: missing source revision metadata')
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--sdk',type=Path,required=True);p.add_argument('--upstream',type=Path)
     p.add_argument('--jobs',type=int,default=2);a=p.parse_args()
+    prepare(HERE)
     sdk=a.sdk.resolve();deps=HERE/'deps';deps.mkdir(exist_ok=True)
-    original=a.upstream.resolve() if a.upstream else deps/'virtualjv-original'
+    bundled=HERE.parent/'virtualjv-original'
+    original=a.upstream.resolve() if a.upstream else (bundled if bundled.exists() else deps/'virtualjv-original')
     if not original.exists():
         run('git','clone','https://github.com/giulioz/jv880_juce.git',original);run('git','-C',original,'checkout',VJV)
     if revision(original)!=VJV: raise RuntimeError('VirtualJV revision mismatch')
@@ -35,8 +43,9 @@ def main():
         if manager is None: raise RuntimeError('Install Android SDK command-line tools, NDK 28.2.13676358, platform/build-tools 35')
         run(manager,'--install','ndk;28.2.13676358','platforms;android-35','build-tools;35.0.0')
     build=HERE/'build-arm64';dist=HERE/'dist';dist.mkdir(exist_ok=True)
-    run('cmake','-S',HERE,'-B',build,'-G','Ninja',f'-DCMAKE_TOOLCHAIN_FILE={ndk}/build/cmake/android.toolchain.cmake','-DANDROID_ABI=arm64-v8a','-DANDROID_PLATFORM=android-29','-DANDROID_STL=c++_static',f'-DJUCE_ROOT={juce}',f'-DVIRTUALJV_ROOT={work}','-DCMAKE_BUILD_TYPE=Release')
-    run('cmake','--build',build,f'-j{a.jobs}')
+    configure=['cmake','-S',HERE,'-B',build,'-G','Ninja',f'-DCMAKE_TOOLCHAIN_FILE={ndk}/build/cmake/android.toolchain.cmake','-DANDROID_ABI=arm64-v8a','-DANDROID_PLATFORM=android-29','-DANDROID_STL=c++_static',f'-DJUCE_ROOT={juce}',f'-DVIRTUALJV_ROOT={work}','-DCMAKE_BUILD_TYPE=Release']
+    if shutil.which('ccache'): configure += ['-DCMAKE_C_COMPILER_LAUNCHER=ccache','-DCMAKE_CXX_COMPILER_LAUNCHER=ccache']
+    run(*configure);run('cmake','--build',build,f'-j{max(1,a.jobs)}')
     lib=build/'libjuce_jni.so'
     run(ndk/'toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip','--strip-unneeded',lib)
     apkWork=HERE/'apk-work'
@@ -64,7 +73,6 @@ def main():
     manifest={'app':'RiJV880 Android Test','version':'0.1.0','abi':'arm64-v8a','min_api':29,'target_api':35,'ndk':'28.2.13676358','virtualjv_commit':VJV,'juce_commit':JUCE,'sha256':hashlib.sha256(apk.read_bytes()).hexdigest(),'hardware_tested':False,'roms_included':False}
     (dist/'BUILD-MANIFEST.json').write_text(json.dumps(manifest,indent=2))
     shutil.copy2(HERE/'LEEME.txt',dist/'RiJV880-AndroidTest-LEEME.txt')
-    # Include the exact build sources and the source components linked into the APK.
     with zipfile.ZipFile(dist/'RiJV880-AndroidTest-v0.1.0-fuentes.zip','w',zipfile.ZIP_DEFLATED) as z:
         for f in HERE.rglob('*'):
             if not f.is_file():continue
@@ -81,7 +89,9 @@ def main():
                 z.write(f,Path('RiJV880/AndroidJV/deps/JUCE/modules')/f.relative_to(juce/'modules'))
         for f in juce.glob('LICENSE*'):
             if f.is_file():z.write(f,Path('RiJV880/AndroidJV/deps/JUCE')/f.name)
+        for f in (ndk/'sources/android/cpufeatures').rglob('*'):
+            if f.is_file(): z.write(f,Path('RiJV880/third_party/cpufeatures')/f.relative_to(ndk/'sources/android/cpufeatures'))
         z.writestr('RiJV880/AndroidJV/deps/JUCE/PINNED-COMMIT.txt',JUCE+'\n')
-        z.writestr('RiJV880/virtualjv-original/PINNED-COMMIT.txt',VJV+'\n')
+        if not (original/'PINNED-COMMIT.txt').exists():z.writestr('RiJV880/virtualjv-original/PINNED-COMMIT.txt',VJV+'\n')
         z.write(dist/'BUILD-MANIFEST.json','RiJV880/BUILD-MANIFEST.json')
 if __name__=='__main__': main()

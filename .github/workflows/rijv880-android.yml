@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: rijv880-android-${{ github.ref }}
   cancel-in-progress: true
@@ -13,6 +14,10 @@ jobs:
   android:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, x86_64]
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-android
       CCACHE_MAXSIZE: 800M
@@ -25,44 +30,62 @@ jobs:
           repository: giulioz/jv880_juce
           ref: bc141fc8b7a5039e909807e85ff1070d5727584b
           path: .deps/virtualjv
-      - name: Source provenance snapshot
-        run: |
-          mkdir -p out
-          git -C .deps/virtualjv rev-parse HEAD > out/virtualjv-commit.txt
-          git -C .deps/virtualjv archive --format=zip --output="$GITHUB_WORKSPACE/out/VirtualJV-upstream.zip" HEAD
-          git archive --format=zip --output="$GITHUB_WORKSPACE/out/AndroidJV-source.zip" HEAD AndroidJV .github/workflows/rijv880-android.yml
-      - uses: actions/upload-artifact@v4
+      - name: Recover previous local test signing key
+        uses: actions/download-artifact@v4
         with:
-          name: virtualjv-upstream-snapshot
-          path: out/
-          retention-days: 7
+          name: RiJV880-AndroidTest-arm64
+          run-id: 37133099836
+          github-token: ${{ github.token }}
+          path: .previous-build
+      - name: Preserve update compatibility and apply startup repair
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          z=ZipFile('.previous-build/RiJV880-AndroidTest-v0.1.0-fuentes.zip')
+          p=Path('AndroidJV/signing/local-test.keystore')
+          p.parent.mkdir(parents=True,exist_ok=True)
+          p.write_bytes(z.read('RiJV880/AndroidJV/signing/local-test.keystore'))
+          PY
+          python3 AndroidJV/startup_fix.py
+          python3 -m py_compile AndroidJV/*.py
       - name: Set up compiler cache
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ccache
       - uses: actions/cache/restore@v4
         with:
           path: .ccache-android
-          key: rijv880-ndk28-juce8015-${{ github.sha }}
-          restore-keys: rijv880-ndk28-juce8015-
-      - name: Compile and verify ARM64 Android application
+          key: rijv880-ndk28-juce8015-${{ matrix.abi }}-${{ github.sha }}
+          restore-keys: |
+            rijv880-ndk28-juce8015-${{ matrix.abi }}-
+            rijv880-ndk28-juce8015-
+      - name: Compile and verify Android application
         shell: bash
         run: |
           set -o pipefail
-          python3 -m py_compile AndroidJV/*.py
-          python3 AndroidJV/build.py --sdk "$ANDROID_HOME" --upstream "$GITHUB_WORKSPACE/.deps/virtualjv" --jobs 4 2>&1 | tee build-android.log
+          python3 AndroidJV/build.py --sdk "$ANDROID_HOME" --upstream "$GITHUB_WORKSPACE/.deps/virtualjv" --abi '${{ matrix.abi }}' --jobs 4 2>&1 | tee build-android.log
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs .previous-build/RiJV880-AndroidTest-v0.1.0-arm64.apk > previous-cert.txt
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs AndroidJV/dist/*.apk > current-cert.txt
+          diff <(grep 'certificate SHA-256 digest' previous-cert.txt) <(grep 'certificate SHA-256 digest' current-cert.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RiJV880-AndroidTest-${{ matrix.abi }}
+          path: AndroidJV/dist/
+          retention-days: 30
+      - name: Android 16 first-launch and import-screen smoke test (no ROMs)
+        if: matrix.abi == 'x86_64'
+        run: bash AndroidJV/smoke_android.sh
       - uses: actions/cache/save@v4
         if: always()
         with:
           path: .ccache-android
-          key: rijv880-ndk28-juce8015-${{ github.sha }}
+          key: rijv880-ndk28-juce8015-${{ matrix.abi }}-${{ github.sha }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: android-build-log
-          path: build-android.log
-          retention-days: 7
-      - uses: actions/upload-artifact@v4
-        if: ${{ success() && hashFiles('AndroidJV/dist/*.apk') != '' }}
-        with:
-          name: RiJV880-AndroidTest-arm64
-          path: AndroidJV/dist/
-          retention-days: 30
+          name: android-diagnostics-${{ matrix.abi }}
+          path: |
+            build-android.log
+            previous-cert.txt
+            current-cert.txt
+            AndroidJV/test-results/
+          retention-days: 14

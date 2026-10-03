@@ -1,0 +1,34 @@
+RiJV880 Android Test 0.1.0 — Galaxy Tab A9 / ARM64
+
+Aplicacion de prueba independiente basada en VirtualJV (giulioz/jv880_juce), commit bc141fc8b7a5039e909807e85ff1070d5727584b. No es un VST para Android. No incluye ROMs. No probada fisicamente en la tablet.
+
+PRIMER INICIO
+1. Instalar la APK. Es una aplicacion nueva, no reemplaza RiFSVR ni RiGear.
+2. Pulsar Importar ROMs y seleccionar un ZIP o varios archivos BIN del JV-880. Se copian a almacenamiento privado de la app. No requiere acceso a todo el almacenamiento.
+3. Archivos requeridos:
+   jv880_nvram.bin       32.768 bytes (NVRAM mutable)
+   jv880_rom1.bin        32.768 bytes
+   jv880_rom2.bin       262.144 bytes
+   jv880_waverom1.bin 2.097.152 bytes
+   jv880_waverom2.bin 2.097.152 bytes
+   Las ROMs de programa y de ondas se identifican por SHA-1; el nombre original puede variar. Las ondas previamente descrambladas tambien se reconocen. Para una NVRAM modificada, conservar nvram en el nombre.
+4. Cuando el motor este preparado, pulsar Iniciar audio. Empezar con 512 muestras. El monitor muestra el buffer y frecuencia realmente negociados, que pueden diferir de lo solicitado.
+5. Conectar tablet -> hub USB-C -> controlador MIDI. MIDI: todos recibe los dispositivos disponibles; el menu permite elegir uno. El boton Teclado muestra teclas tactiles para probar sin controlador.
+
+CONTROLES
+Panel horizontal. Browse/Settings/Common/Tone 1/2/3/4 y Rhythm Set, conservando los editores de VirtualJV. Las paginas extensas tienen desplazamiento, no se achican para hacerlas entrar. Tres columnas de patches con filas tactiles. Flechas < > cambian programas. Volumen de salida inicia en 70%. Panico libera sustain y envia All Sound Off. Exportar NVRAM guarda 32 KB mediante el selector de Android; la importacion o exportacion detiene el audio. Al volver del segundo plano hay que pulsar Iniciar audio.
+
+AUDIO Y DIAGNOSTICO
+Motor de emulacion conservado, dominio interno de 64 kHz y remuestreador del proyecto original. Salida al sample rate nativo de Android mediante JUCE/Oboe. Opciones 256/512/1024 muestras (la plataforma decide el buffer efectivo). DSP es tiempo de computo respecto del plazo del bloque, no porcentaje global del procesador. Tarde cuenta callbacks que exceden ese plazo. Xrun es el contador de la API si esta disponible, n/d si no. Bloqueo cuenta bloques silenciados cuando el editor ocupa el motor; los mensajes MIDI de esos bloques se conservan en una cola limitada. MIDI omitido incluye paquetes demasiado largos o desbordamientos. Estas medidas no reemplazan una prueba real de audio.
+
+LIMITES DE ESTA PRUEBA
+Modo de un patch o kit, como VirtualJV: el MIDI de canal se dirige al canal 1 o al 10 para ritmos. No se implemento aun un mixer Performance multitimb rico. No hay limitador artificial de polifonia: se conserva el comportamiento del motor. Sustain CC64 se transmite sin una politica nueva de robo de voces. Dumps SysEx de 32 bytes o mas no se admiten en esta version; la edicion interna usa mensajes cortos. Se conservan expansiones reconocidas por el proyecto, pero no se asegura que todas hayan sido probadas; Custom.bin no se importa. ZIP y BIN admitidos; RAR y 7z no. No hay servicio de audio en segundo plano. Exportar NVRAM no es un archivo completo de estado del plugin ni guarda la eleccion de expansion. No se incluye un banco externo de sonidos ni se descargan ROMs automaticamente.
+
+PRUEBA SUGERIDA
+Probar primero un patch interno, notas sueltas y acordes, sustain durante varios minutos, cambio de patch y mover paginas/perillas mientras suena. Comparar DSP, pico, tarde, xrun y bloqueo. No se promete un porcentaje de CPU ni ausencia de cortes antes de probarlo en la tablet. No usar Bluetooth para evaluar latencia.
+
+COMPILACION
+Linux, Java 17+, Python 3, CMake y Ninja. Android SDK con plataforma/build-tools 35 y NDK 28.2.13676358. JUCE 8.0.15 commit 91ad83ae34a81e0833b1a2b0866f54846370ae53. Ejecutar python3 AndroidJV/build.py --sdk /ruta/Android/Sdk --upstream /ruta/jv880_juce. Las dependencias se descargan de sus repositorios oficiales cuando no estan presentes. El ZIP de fuentes conserva originales, fuentes modificadas, los modulos JUCE usados, scripts y manifiesto. La firma es de prueba local, no de Google Play; no usar esa clave como firma comercial.
+
+LICENCIAS
+Conservar LICENSE de VirtualJV y las cabeceras de nukeykt, giulioz y demas autores. El nucleo original impone uso no comercial y redistribucion de las fuentes completas correspondientes a sus binarios modificados. JUCE, Oboe y las bibliotecas incluidas mantienen sus respectivas licencias, presentes en las fuentes. Los derechos de las ROMs no se transfieren con este proyecto. Esta distribucion no contiene ROMs. No es un producto oficial de Roland.

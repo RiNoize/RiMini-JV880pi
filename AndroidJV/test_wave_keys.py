@@ -50,6 +50,10 @@ struct Rig {
     }
     Component* popup() { auto* p=Component::getCurrentlyModalComponent();require(p!=nullptr,"Popup missing");return p; }
     void open(int id) {
+        // Xvfb starts its cursor in the screen centre. A wider new popup can
+        // appear underneath it and legitimately change the mouse highlight.
+        // Park it outside all popup bounds for these keyboard-only assertions.
+        Desktop::setMousePosition({1900,1060});
         host.toFront(true);wave.grabKeyboardFocus();pump(60);
         wave.setSelectedId(id,dontSendNotification);pump();changes=0;initial=id;
         std::cout<<"OPEN id="<<id<<" parented="<<(look.popupParent!=nullptr)<<" focus="<<wave.hasKeyboardFocus(true)<<std::endl;
@@ -100,7 +104,7 @@ int main() {
             r.fill(0);r.open(0);r.key(KeyPress::leftKey);r.expect(0);r.cancel();
             r.fill(17,true,6);r.open(5);r.key(KeyPress::rightKey);r.expect(11);
             r.key(KeyPress::rightKey);r.expect(17);r.cancel();
-            r.fill(160);r.open(8);
+            r.fill(160);r.open(8);r.expect(8);
             for(int n=0;n<100;++n){r.key(KeyPress::rightKey);r.expect(40);r.key(KeyPress::leftKey);r.expect(8);}
             r.cancel();
             r.wave.setSelectedId(5,dontSendNotification);pump();r.changes=0;

@@ -37,7 +37,7 @@ jobs:
           run-id: 37133099836
           github-token: ${{ github.token }}
           path: .previous-build
-      - name: Preserve signing and apply document and audio fixes
+      - name: Preserve signing and apply UI-only revision on 0.1.3 audio
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -52,6 +52,7 @@ jobs:
           python3 AndroidJV/eof_fix.py
           python3 AndroidJV/native_uri_fix.py
           python3 AndroidJV/audio_fix.py
+          python3 AndroidJV/patch_change_fix.py
           python3 -m py_compile AndroidJV/*.py
       - name: Audio continuity and LCD transfer tests (synthetic, host ASan/UBSan)
         run: |
@@ -75,11 +76,19 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs .previous-build/RiJV880-AndroidTest-v0.1.0-arm64.apk > previous-cert.txt
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs AndroidJV/dist/*.apk > current-cert.txt
           diff <(grep 'certificate SHA-256 digest' previous-cert.txt) <(grep 'certificate SHA-256 digest' current-cert.txt)
+          cp AndroidJV/generated/virtualjv/PATCH-UI-SCOPE.json AndroidJV/dist/
       - uses: actions/upload-artifact@v4
         with:
           name: RiJV880-AndroidTest-${{ matrix.abi }}
           path: AndroidJV/dist/
           retention-days: 30
+      - name: Real JUCE notification regression (synthetic ROM names, no firmware)
+        if: matrix.abi == 'arm64-v8a'
+        timeout-minutes: 7
+        run: |
+          set -o pipefail
+          sudo apt-get install -y -qq libasound2-dev libfontconfig1-dev libfreetype6-dev libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev libgl1-mesa-dev xvfb
+          python3 -u AndroidJV/test_patch_ui.py --juce AndroidJV/deps/JUCE --upstream .deps/virtualjv --generated AndroidJV/generated/virtualjv --out patch-ui-test 2>&1 | tee patch-ui-test.log
       - name: Android 16 ZIP and BIN document import (synthetic fixtures, no ROMs)
         if: matrix.abi == 'x86_64'
         timeout-minutes: 9
@@ -98,8 +107,10 @@ jobs:
           path: |
             audio-unit-tests.txt
             build-android.log
+            patch-ui-test.log
             import-test.log
             previous-cert.txt
             current-cert.txt
+            AndroidJV/generated/virtualjv/PATCH-UI-SCOPE.json
             AndroidJV/test-results/
           retention-days: 14

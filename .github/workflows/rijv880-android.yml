@@ -37,7 +37,7 @@ jobs:
           run-id: 37133099836
           github-token: ${{ github.token }}
           path: .previous-build
-      - name: Preserve signing and apply reversible display-only receive notice filter
+      - name: Preserve signing and add opt-in waveform column navigation
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -55,6 +55,7 @@ jobs:
           python3 AndroidJV/patch_change_fix.py
           python3 AndroidJV/browser_fix.py
           python3 AndroidJV/bulk_display_fix.py
+          python3 AndroidJV/wave_keys_fix.py
           python3 -m py_compile AndroidJV/*.py
       - name: Audio continuity and display filter tests (synthetic, host ASan/UBSan)
         run: |
@@ -81,19 +82,19 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs AndroidJV/dist/*.apk > current-cert.txt
           diff <(grep 'certificate SHA-256 digest' previous-cert.txt) <(grep 'certificate SHA-256 digest' current-cert.txt)
           python3 AndroidJV/test_lcd_view.py --generated AndroidJV/generated/virtualjv --out lcd-view-test | tee lcd-renderer-tests.txt
-          cp AndroidJV/generated/virtualjv/BULK-DISPLAY-SCOPE.json AndroidJV/dist/
+          cp AndroidJV/generated/virtualjv/WAVE-KEYS-SCOPE.json AndroidJV/dist/
       - uses: actions/upload-artifact@v4
         with:
           name: RiJV880-AndroidTest-${{ matrix.abi }}
           path: AndroidJV/dist/
           retention-days: 30
-      - name: Real JUCE browser memory-safety regression (synthetic catalogue, no firmware)
+      - name: Real JUCE popup keyboard navigation (synthetic waveform names)
         if: matrix.abi == 'arm64-v8a'
         timeout-minutes: 8
         run: |
           set -o pipefail
           sudo apt-get install -y -qq libasound2-dev libfontconfig1-dev libfreetype6-dev libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev libgl1-mesa-dev xvfb
-          python3 -u AndroidJV/test_browser.py --juce AndroidJV/deps/JUCE --generated AndroidJV/generated/virtualjv --out browser-test 2>&1 | tee browser-test.log
+          python3 -u AndroidJV/test_wave_keys.py --juce AndroidJV/deps/JUCE --generated AndroidJV/generated/virtualjv --out wave-key-test 2>&1 | tee wave-key-test.log
       - name: Android 16 ZIP and BIN document import (synthetic fixtures, no ROMs)
         if: matrix.abi == 'x86_64'
         timeout-minutes: 9
@@ -114,14 +115,13 @@ jobs:
             bulk-display-tests.txt
             lcd-renderer-tests.txt
             lcd-view-test/*.ppm
-            AndroidJV/generated/virtualjv/BULK-DISPLAY-SCOPE.json
+            AndroidJV/generated/virtualjv/WAVE-KEYS-SCOPE.json
             build-android.log
-            browser-test.log
-            browser-test/legacy-asan.txt
-            browser-test/fixed-result.txt
+            wave-key-test.log
+            wave-key-test/result.txt
+            wave-key-test/*.png
             import-test.log
             previous-cert.txt
             current-cert.txt
-            AndroidJV/generated/virtualjv/BROWSER-SAFETY-SCOPE.json
             AndroidJV/test-results/
           retention-days: 14

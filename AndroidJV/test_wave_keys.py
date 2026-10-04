@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Exercise the actual modified JUCE PopupMenu and production Menu widget.
 Synthetic item names only; no firmware, MIDI device or physical keyboard.
+Requires Xvfb and Openbox for real desktop/focus behavior (CI installs Openbox).
 """
 from pathlib import Path
 import argparse
 import os
+import shutil
 import subprocess
 
 CPP = r'''#include <juce_gui_basics/juce_gui_basics.h>
@@ -54,7 +56,11 @@ struct Rig {
         if(file) { FileOutputStream out(File::getCurrentWorkingDirectory().getChildFile(file));PNGImageFormat png;png.writeImageToStream(image,out); }
         return look.highlighted;
     }
-    void expect(int id) { require(highlight()==id,"Wrong highlighted row/column");require(wave.getSelectedId()==initial && changes==0,"Navigation edited value before confirmation"); }
+    void expect(int id) {
+        const int actual=highlight();
+        if(actual!=id) throw std::runtime_error("Highlighted "+std::to_string(actual)+", expected "+std::to_string(id)+", initial "+std::to_string(initial));
+        require(wave.getSelectedId()==initial && changes==0,"Navigation edited value before confirmation");
+    }
     void cancel() { key(KeyPress::escapeKey);pump(50);require(!wave.isPopupActive(),"Escape did not close");require(wave.getSelectedId()==initial && changes==0,"Cancel changed value"); }
     void commit(int id) { key(KeyPress::returnKey);pump(50);require(!wave.isPopupActive(),"Enter did not close");require(wave.getSelectedId()==id,"Enter selected wrong wave");require(changes==(id==initial?0:1),"Wrong number of value callbacks"); }
 };
@@ -109,6 +115,10 @@ def main() -> None:
     p.add_argument('--generated',type=Path,required=True)
     p.add_argument('--out',type=Path,required=True)
     a=p.parse_args();out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
+    if shutil.which('openbox') is None:
+        if os.environ.get('GITHUB_ACTIONS') != 'true':
+            raise RuntimeError('Install Openbox and Xvfb before running this desktop popup test')
+        subprocess.run(['sudo','apt-get','install','-y','-qq','openbox'],check=True)
     src=a.generated/'Source'
     for kind in ('EditToneTab','EditRhythmTab'):
         t=(src/'ui'/(kind+'.cpp')).read_text()
@@ -128,7 +138,8 @@ target_link_libraries(wave-key-test PRIVATE juce::juce_gui_basics)
         f'-DJUCE_ROOT={a.juce.resolve()}','-DCMAKE_BUILD_TYPE=Release'],check=True)
     subprocess.run(['cmake','--build',str(out/'build'),'--target','wave-key-test','-j4'],check=True)
     exe=out/'build/wave-key-test_artefacts/Release/wave-key-test'
-    result=subprocess.run(['xvfb-run','-a','-s','-screen 0 1920x1080x24',str(exe)],
+    wm_script='openbox --sm-disable >openbox.log 2>&1 & wm=$!; trap "kill $wm 2>/dev/null || true" EXIT; sleep 1; "$@"'
+    result=subprocess.run(['xvfb-run','-a','-s','-screen 0 1920x1080x24','bash','-c',wm_script,'--',str(exe)],
         cwd=out,capture_output=True,text=True,timeout=150)
     (out/'result.txt').write_text(result.stdout+result.stderr)
     print(result.stdout+result.stderr,flush=True)

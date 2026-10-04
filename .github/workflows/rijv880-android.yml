@@ -37,7 +37,7 @@ jobs:
           run-id: 37133099836
           github-token: ${{ github.token }}
           path: .previous-build
-      - name: Preserve signing and apply browser safety revision
+      - name: Preserve signing and apply reversible display-only receive notice filter
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -54,12 +54,15 @@ jobs:
           python3 AndroidJV/audio_fix.py
           python3 AndroidJV/patch_change_fix.py
           python3 AndroidJV/browser_fix.py
+          python3 AndroidJV/bulk_display_fix.py
           python3 -m py_compile AndroidJV/*.py
-      - name: Audio continuity and LCD transfer tests (synthetic, host ASan/UBSan)
+      - name: Audio continuity and display filter tests (synthetic, host ASan/UBSan)
         run: |
           set -o pipefail
           clang++ -std=c++20 -O1 -g -fsanitize=address,undefined -pthread AndroidJV/test_audio.cpp -o test-audio
           ./test-audio | tee audio-unit-tests.txt
+          clang++ -std=c++20 -O1 -g -fsanitize=address,undefined AndroidJV/test_bulk_display.cpp -o test-bulk
+          ./test-bulk | tee bulk-display-tests.txt
       - name: Set up compiler cache
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ccache
       - uses: actions/cache/restore@v4
@@ -77,7 +80,8 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs .previous-build/RiJV880-AndroidTest-v0.1.0-arm64.apk > previous-cert.txt
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs AndroidJV/dist/*.apk > current-cert.txt
           diff <(grep 'certificate SHA-256 digest' previous-cert.txt) <(grep 'certificate SHA-256 digest' current-cert.txt)
-          cp AndroidJV/generated/virtualjv/BROWSER-SAFETY-SCOPE.json AndroidJV/dist/
+          python3 AndroidJV/test_lcd_view.py --generated AndroidJV/generated/virtualjv --out lcd-view-test | tee lcd-renderer-tests.txt
+          cp AndroidJV/generated/virtualjv/BULK-DISPLAY-SCOPE.json AndroidJV/dist/
       - uses: actions/upload-artifact@v4
         with:
           name: RiJV880-AndroidTest-${{ matrix.abi }}
@@ -107,6 +111,10 @@ jobs:
           name: android-diagnostics-${{ matrix.abi }}
           path: |
             audio-unit-tests.txt
+            bulk-display-tests.txt
+            lcd-renderer-tests.txt
+            lcd-view-test/*.ppm
+            AndroidJV/generated/virtualjv/BULK-DISPLAY-SCOPE.json
             build-android.log
             browser-test.log
             browser-test/legacy-asan.txt

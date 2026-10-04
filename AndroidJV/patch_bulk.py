@@ -27,7 +27,10 @@ def patch_bulk(root: Path) -> None:
                               .getChildFile("RiJV880-hide-bulk.txt");
   hideBulkNotice = preference.loadFileAsString().trim() != "0";
   redrawTimer.startTimerHz(12);''')
-    change('ui/widgets/LCDisplay.cpp', '    if(auto* pixels=displayCopy->LCD_Update()) {', '''    // The snapshot and the emulator remain untouched. Filter a local text copy
+    change('ui/widgets/LCDisplay.cpp', '    if(auto* pixels=displayCopy->LCD_Update()) {', '''    // LCD_Update already requires this flag. Do not inspect uninitialized text
+    // while waiting for the first valid snapshot from the emulated display.
+    if (!displayCopy->lcd_init) return;
+    // The snapshot and the emulator remain untouched. Filter a local text copy
     // immediately before rendering, then restore it for the next paint/toggle.
     RiBulkDisplay::Frame live;
     std::memcpy(live.text.data(), displayCopy->LCD_Data, live.text.size());
